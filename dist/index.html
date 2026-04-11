@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Xaero Map Viewer</title>
+  <link rel="stylesheet" href="/styles/main.css">
+  <script type="module" crossorigin src="/assets/index-HGfZvCOv.js"></script>
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <h2>Xaero Map Viewer</h2>
+      <div id="status" class="status">正在连接服务器...</div>
+      
+      <div class="control-group">
+        <label>地图目录路径:</label>
+        <input type="text" id="dirInput" placeholder="例如: C:\Users\xxx\.minecraft\XaeroWorldMap">
+        <button id="setDirBtn">设置目录</button>
+      </div>
+      
+      <div class="control-group" id="worldSelect" style="display:none;">
+        <label>世界:</label>
+        <select id="worldSelector"></select>
+      </div>
+      
+      <div class="control-group" id="dimSelect" style="display:none;">
+        <label>维度:</label>
+        <select id="dimSelector"></select>
+      </div>
+      
+      <div class="control-group" id="mapTypeSelect" style="display:none;">
+        <label>地图类型:</label>
+        <select id="mapTypeSelector"></select>
+      </div>
+      
+      <div class="control-group">
+        <label>坐标: <span id="coords">-</span></label>
+      </div>
+      
+      <div class="control-group">
+        <label>缩放: <span id="zoomLevel">1x</span></label>
+        <input type="range" id="zoomSlider" min="-4" max="4" value="0" step="1">
+      </div>
+      
+      <div class="control-group">
+        <label>跳转坐标:</label>
+        <div class="coord-inputs">
+          <input type="text" id="targetX" placeholder="X">
+          <input type="text" id="targetZ" placeholder="Z">
+          <button id="gotoCoords">跳转</button>
+        </div>
+      </div>
+      
+      <div id="loading" style="display:none;">
+        <div class="spinner"></div>
+        <span>加载中...</span>
+      </div>
+      
+      <div id="stats"></div>
+    </div>
+    
+    <div id="map-container">
+      <canvas id="mapCanvas"></canvas>
+    </div>
+  </div>
+</body>
+</html>
