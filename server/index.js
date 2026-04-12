@@ -1,8 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import compression from 'compression';
-import { readdir, readFile, writeFile, mkdir, unlink } from 'fs/promises';
+import { readdir, readFile, writeFile, mkdir, unlink, open } from 'fs/promises';
 import { existsSync, writeFileSync, readFileSync } from 'fs';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import JSZip from 'jszip';
@@ -128,7 +129,7 @@ async function readPixelCache(dimPath, regionX, regionZ, yHeight = null) {
   
   try {
     const fd = await new Promise((resolve, reject) => {
-      require('fs').open(filePath, 'r', (err, fd) => {
+      fs.open(filePath, 'r', (err, fd) => {
         if (err) reject(err);
         else resolve(fd);
       });
@@ -136,7 +137,7 @@ async function readPixelCache(dimPath, regionX, regionZ, yHeight = null) {
     
     const header = Buffer.alloc(BLOCK_HEADER_SIZE);
     await new Promise((resolve, reject) => {
-      require('fs').read(fd, header, 0, BLOCK_HEADER_SIZE, 0, (err) => {
+      fs.read(fd, header, 0, BLOCK_HEADER_SIZE, 0, (err) => {
         if (err) reject(err);
         else resolve(undefined);
       });
@@ -144,7 +145,7 @@ async function readPixelCache(dimPath, regionX, regionZ, yHeight = null) {
     
     const magic = header.readUInt32LE(0);
     if (magic !== 0x584D4350) {
-      await new Promise(resolve => require('fs').close(fd, () => resolve(undefined)));
+      await new Promise(resolve => fs.close(fd, () => resolve(undefined)));
       return null;
     }
     
@@ -152,7 +153,7 @@ async function readPixelCache(dimPath, regionX, regionZ, yHeight = null) {
     const exists = header[8 + regionIndex];
     
     if (!exists) {
-      await new Promise(resolve => require('fs').close(fd, () => resolve(undefined)));
+      await new Promise(resolve => fs.close(fd, () => resolve(undefined)));
       return null;
     }
     
@@ -160,13 +161,13 @@ async function readPixelCache(dimPath, regionX, regionZ, yHeight = null) {
     const pixels = Buffer.alloc(REGION_PIXEL_SIZE);
     
     await new Promise((resolve, reject) => {
-      require('fs').read(fd, pixels, 0, REGION_PIXEL_SIZE, dataOffset, (err) => {
+      fs.read(fd, pixels, 0, REGION_PIXEL_SIZE, dataOffset, (err) => {
         if (err) reject(err);
         else resolve(undefined);
       });
     });
     
-    await new Promise(resolve => require('fs').close(fd, () => resolve(undefined)));
+    await new Promise(resolve => fs.close(fd, () => resolve(undefined)));
     
     pixelCache.set(memKey, pixels);
     pixelCacheOrder.push(memKey);
@@ -208,7 +209,7 @@ async function writePixelCache(dimPath, regionX, regionZ, pixels, yHeight = null
       await writeFile(filePath, fullFile);
     } else {
       const fd = await new Promise((resolve, reject) => {
-        require('fs').open(filePath, 'r+', (err, fd) => {
+        fs.open(filePath, 'r+', (err, fd) => {
           if (err) reject(err);
           else resolve(fd);
         });
@@ -216,7 +217,7 @@ async function writePixelCache(dimPath, regionX, regionZ, pixels, yHeight = null
       
       const existsByte = Buffer.alloc(1);
       await new Promise((resolve, reject) => {
-        require('fs').read(fd, existsByte, 0, 1, 8 + regionIndex, (err) => {
+        fs.read(fd, existsByte, 0, 1, 8 + regionIndex, (err) => {
           if (err) reject(err);
           else resolve(undefined);
         });
@@ -224,7 +225,7 @@ async function writePixelCache(dimPath, regionX, regionZ, pixels, yHeight = null
       
       if (!existsByte[0]) {
         await new Promise((resolve, reject) => {
-          require('fs').write(fd, Buffer.from([1]), 0, 1, 8 + regionIndex, (err) => {
+          fs.write(fd, Buffer.from([1]), 0, 1, 8 + regionIndex, (err) => {
             if (err) reject(err);
             else resolve(undefined);
           });
@@ -233,13 +234,13 @@ async function writePixelCache(dimPath, regionX, regionZ, pixels, yHeight = null
       
       const dataOffset = BLOCK_HEADER_SIZE + regionIndex * REGION_PIXEL_SIZE;
       await new Promise((resolve, reject) => {
-        require('fs').write(fd, pixels, 0, REGION_PIXEL_SIZE, dataOffset, (err) => {
+        fs.write(fd, pixels, 0, REGION_PIXEL_SIZE, dataOffset, (err) => {
           if (err) reject(err);
           else resolve(undefined);
         });
       });
       
-      await new Promise(resolve => require('fs').close(fd, () => resolve(undefined)));
+      await new Promise(resolve => fs.close(fd, () => resolve(undefined)));
     }
   } catch (e) {
     console.log('Cache write error:', e.message);
