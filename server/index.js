@@ -1,9 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import compression from 'compression';
-import { readdir, readFile, writeFile, mkdir, unlink, open } from 'fs/promises';
+import { readdir, readFile, writeFile, mkdir, unlink } from 'fs/promises';
 import { existsSync, writeFileSync, readFileSync } from 'fs';
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import JSZip from 'jszip';
@@ -58,10 +57,6 @@ loadConfig();
 const MAX_MEMORY_CACHE_ENTRIES = 100;
 const pixelCache = new Map();
 const pixelCacheOrder = [];
-const REGION_PIXEL_SIZE = 512 * 512 * 4;
-const BLOCK_SIZE = 4;
-const BLOCK_REGIONS = BLOCK_SIZE * BLOCK_SIZE;
-const BLOCK_HEADER_SIZE = 4 + 4 + BLOCK_REGIONS;
 
 function pruneMemoryCache() {
   while (pixelCacheOrder.length > MAX_MEMORY_CACHE_ENTRIES) {
@@ -71,180 +66,60 @@ function pruneMemoryCache() {
 }
 
 async function ensureCacheDir() {
-  try {
-    if (!existsSync(cacheDirectory)) {
-      await mkdir(cacheDirectory, { recursive: true });
-    }
-    return true;
-  } catch (e) {
-    console.log(`Cannot create cache directory ${cacheDirectory}: ${e.message}`);
-    cacheDirectory = path.join(__dirname, 'cache');
-    if (!existsSync(cacheDirectory)) {
-      try {
-        await mkdir(cacheDirectory, { recursive: true });
-      } catch {}
-    }
-    return false;
+  if (!existsSync(cacheDirectory)) {
+    await mkdir(cacheDirectory, { recursive: true });
   }
 }
 
-function getCacheKey(dimPath, yHeight = null) {
+function getCacheKey(dimPath, regionX, regionZ, yHeight = null) {
   const relativePath = path.relative(mapDirectory, dimPath);
   const heightSuffix = yHeight !== null ? `_y${yHeight}` : '';
-  const safePath = relativePath.replace(/[\\/:*?"<>|]/g, '_');
-  return `${safePath}${heightSuffix}`;
+  return `${relativePath}/${regionX}_${regionZ}${heightSuffix}`;
 }
 
-function getBlockCoords(regionX, regionZ) {
-  const blockX = Math.floor(regionX / BLOCK_SIZE);
-  const blockZ = Math.floor(regionZ / BLOCK_SIZE);
-  const localX = ((regionX % BLOCK_SIZE) + BLOCK_SIZE) % BLOCK_SIZE;
-  const localZ = ((regionZ % BLOCK_SIZE) + BLOCK_SIZE) % BLOCK_SIZE;
-  return { blockX, blockZ, localX, localZ };
-}
-
-function getBlockFilePath(cacheKey, blockX, blockZ) {
-  return path.join(cacheDirectory, `${cacheKey}_${blockX}_${blockZ}.bin`);
+function getCacheFilePath(cacheKey) {
+  const safeKey = cacheKey.replace(/[\\/:*?"<>|]/g, '_');
+  return path.join(cacheDirectory, `${safeKey}.bin`);
 }
 
 async function readPixelCache(dimPath, regionX, regionZ, yHeight = null) {
-  const cacheKey = getCacheKey(dimPath, yHeight);
-  const memKey = `${cacheKey}_${regionX}_${regionZ}`;
+  const key = getCacheKey(dimPath, regionX, regionZ, yHeight);
   
-  if (pixelCache.has(memKey)) {
-    const idx = pixelCacheOrder.indexOf(memKey);
+  if (pixelCache.has(key)) {
+    const idx = pixelCacheOrder.indexOf(key);
     if (idx !== -1) {
       pixelCacheOrder.splice(idx, 1);
-      pixelCacheOrder.push(memKey);
+      pixelCacheOrder.push(key);
     }
-    return pixelCache.get(memKey);
+    return pixelCache.get(key);
   }
   
-  const { blockX, blockZ, localX, localZ } = getBlockCoords(regionX, regionZ);
-  const filePath = getBlockFilePath(cacheKey, blockX, blockZ);
-  
-  if (!existsSync(filePath)) {
-    return null;
-  }
-  
-  try {
-    const fd = await new Promise((resolve, reject) => {
-      fs.open(filePath, 'r', (err, fd) => {
-        if (err) reject(err);
-        else resolve(fd);
-      });
-    });
-    
-    const header = Buffer.alloc(BLOCK_HEADER_SIZE);
-    await new Promise((resolve, reject) => {
-      fs.read(fd, header, 0, BLOCK_HEADER_SIZE, 0, (err) => {
-        if (err) reject(err);
-        else resolve(undefined);
-      });
-    });
-    
-    const magic = header.readUInt32LE(0);
-    if (magic !== 0x584D4350) {
-      await new Promise(resolve => fs.close(fd, () => resolve(undefined)));
+  const filePath = getCacheFilePath(key);
+  if (existsSync(filePath)) {
+    try {
+      const data = await readFile(filePath);
+      pixelCache.set(key, data);
+      pixelCacheOrder.push(key);
+      pruneMemoryCache();
+      return data;
+    } catch {
       return null;
     }
-    
-    const regionIndex = localZ * BLOCK_SIZE + localX;
-    const exists = header[8 + regionIndex];
-    
-    if (!exists) {
-      await new Promise(resolve => fs.close(fd, () => resolve(undefined)));
-      return null;
-    }
-    
-    const dataOffset = BLOCK_HEADER_SIZE + regionIndex * REGION_PIXEL_SIZE;
-    const pixels = Buffer.alloc(REGION_PIXEL_SIZE);
-    
-    await new Promise((resolve, reject) => {
-      fs.read(fd, pixels, 0, REGION_PIXEL_SIZE, dataOffset, (err) => {
-        if (err) reject(err);
-        else resolve(undefined);
-      });
-    });
-    
-    await new Promise(resolve => fs.close(fd, () => resolve(undefined)));
-    
-    pixelCache.set(memKey, pixels);
-    pixelCacheOrder.push(memKey);
-    pruneMemoryCache();
-    
-    return pixels;
-  } catch {
-    return null;
   }
+  
+  return null;
 }
 
 async function writePixelCache(dimPath, regionX, regionZ, pixels, yHeight = null) {
-  const cacheKey = getCacheKey(dimPath, yHeight);
-  const memKey = `${cacheKey}_${regionX}_${regionZ}`;
-  
-  pixelCache.set(memKey, pixels);
-  pixelCacheOrder.push(memKey);
+  const key = getCacheKey(dimPath, regionX, regionZ, yHeight);
+  pixelCache.set(key, pixels);
+  pixelCacheOrder.push(key);
   pruneMemoryCache();
   
-  const { blockX, blockZ, localX, localZ } = getBlockCoords(regionX, regionZ);
-  const filePath = getBlockFilePath(cacheKey, blockX, blockZ);
-  const regionIndex = localZ * BLOCK_SIZE + localX;
-  
+  const filePath = getCacheFilePath(key);
   try {
-    await ensureCacheDir();
-    
-    if (!existsSync(filePath)) {
-      const header = Buffer.alloc(BLOCK_HEADER_SIZE);
-      header.writeUInt32LE(0x584D4350, 0);
-      header.writeUInt32LE(1, 4);
-      header[8 + regionIndex] = 1;
-      
-      const emptyBlock = Buffer.alloc(BLOCK_REGIONS * REGION_PIXEL_SIZE);
-      const fullFile = Buffer.concat([header, emptyBlock]);
-      
-      const localOffset = regionIndex * REGION_PIXEL_SIZE;
-      pixels.copy(fullFile, BLOCK_HEADER_SIZE + localOffset);
-      
-      await writeFile(filePath, fullFile);
-    } else {
-      const fd = await new Promise((resolve, reject) => {
-        fs.open(filePath, 'r+', (err, fd) => {
-          if (err) reject(err);
-          else resolve(fd);
-        });
-      });
-      
-      const existsByte = Buffer.alloc(1);
-      await new Promise((resolve, reject) => {
-        fs.read(fd, existsByte, 0, 1, 8 + regionIndex, (err) => {
-          if (err) reject(err);
-          else resolve(undefined);
-        });
-      });
-      
-      if (!existsByte[0]) {
-        await new Promise((resolve, reject) => {
-          fs.write(fd, Buffer.from([1]), 0, 1, 8 + regionIndex, (err) => {
-            if (err) reject(err);
-            else resolve(undefined);
-          });
-        });
-      }
-      
-      const dataOffset = BLOCK_HEADER_SIZE + regionIndex * REGION_PIXEL_SIZE;
-      await new Promise((resolve, reject) => {
-        fs.write(fd, pixels, 0, REGION_PIXEL_SIZE, dataOffset, (err) => {
-          if (err) reject(err);
-          else resolve(undefined);
-        });
-      });
-      
-      await new Promise(resolve => fs.close(fd, () => resolve(undefined)));
-    }
-  } catch (e) {
-    console.log('Cache write error:', e.message);
-  }
+    await writeFile(filePath, pixels);
+  } catch {}
 }
 
 async function loadRegionPixels(dimPath, regionX, regionZ, caveMode = null, caveStart = null) {
@@ -972,10 +847,6 @@ app.post('/api/set-cache-directory', async (req, res) => {
       await mkdir(directory, { recursive: true });
     }
     
-    const testFile = path.join(directory, '.test_write');
-    await writeFile(testFile, 'test');
-    await unlink(testFile);
-    
     cacheDirectory = directory;
     pixelCache.clear();
     pixelCacheOrder.length = 0;
@@ -983,7 +854,7 @@ app.post('/api/set-cache-directory', async (req, res) => {
     
     res.json({ success: true, directory: cacheDirectory });
   } catch (error) {
-    res.status(500).json({ error: `无法使用此缓存目录: ${error.message}` });
+    res.status(500).json({ error: `无法创建缓存目录: ${error.message}` });
   }
 });
 
@@ -1680,15 +1551,7 @@ function readTagValue(data, view, offset, type) {
 }
 
 app.listen(PORT, async () => {
-  try {
-    if (cacheDirectory && !existsSync(cacheDirectory)) {
-      await mkdir(cacheDirectory, { recursive: true });
-    }
-  } catch (e) {
-    console.log(`Warning: Cannot create cache directory ${cacheDirectory}: ${e.message}`);
-    cacheDirectory = path.join(__dirname, 'cache');
-    console.log(`Falling back to default cache directory: ${cacheDirectory}`);
-  }
+  await ensureCacheDir();
   console.log(`Xaero Map Server running at http://localhost:${PORT}`);
   console.log(`Default directory: ${mapDirectory}`);
   console.log(`Pixel cache: ${cacheDirectory}`);
