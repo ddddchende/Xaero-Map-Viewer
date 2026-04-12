@@ -54,7 +54,8 @@ function saveConfig() {
 
 loadConfig();
 
-const MAX_MEMORY_CACHE_ENTRIES = 100;
+const MAX_MEMORY_CACHE_ENTRIES = 20;
+const MAX_CONCURRENT_LOADS = 4;
 const pixelCache = new Map();
 const pixelCacheOrder = [];
 
@@ -62,6 +63,14 @@ function pruneMemoryCache() {
   while (pixelCacheOrder.length > MAX_MEMORY_CACHE_ENTRIES) {
     const oldestKey = pixelCacheOrder.shift();
     pixelCache.delete(oldestKey);
+  }
+}
+
+function clearMemoryCache() {
+  pixelCache.clear();
+  pixelCacheOrder.length = 0;
+  if (global.gc) {
+    global.gc();
   }
 }
 
@@ -862,6 +871,19 @@ app.get('/api/cache-directory', (req, res) => {
   res.json({ directory: cacheDirectory });
 });
 
+app.get('/api/cache-size', async (req, res) => {
+  try {
+    if (!existsSync(cacheDirectory)) {
+      return res.json({ count: 0, sizeMB: 0 });
+    }
+    const files = await readdir(cacheDirectory);
+    const count = files.filter(f => f.endsWith('.bin')).length;
+    res.json({ count, sizeMB: count });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
 app.delete('/api/cache-directory', async (req, res) => {
   try {
     pixelCache.clear();
@@ -1010,7 +1032,7 @@ app.get('/api/batch-regions', async (req, res) => {
     const coordPairs = String(coords).split(';').map(s => {
       const parts = s.split(',');
       return { x: parseInt(parts[0]), z: parseInt(parts[1]) };
-    }).filter(c => !isNaN(c.x) && !isNaN(c.z));
+    }).filter(c => !isNaN(c.x) && !isNaN(c.z)).slice(0, 20);
     
     const REGION_PIXEL_SIZE = 512 * 512 * 4;
     const totalRegions = coordPairs.length;
@@ -1018,9 +1040,18 @@ app.get('/api/batch-regions', async (req, res) => {
     
     buffer.writeUInt32LE(totalRegions, 0);
     
-    const results = await Promise.all(
-      coordPairs.map(coord => loadRegionPixels(dimPath, coord.x, coord.z, caveModeValue, caveStartValue))
-    );
+    const results = [];
+    for (let i = 0; i < totalRegions; i += MAX_CONCURRENT_LOADS) {
+      const batch = coordPairs.slice(i, i + MAX_CONCURRENT_LOADS);
+      const batchResults = await Promise.all(
+        batch.map(coord => loadRegionPixels(dimPath, coord.x, coord.z, caveModeValue, caveStartValue))
+      );
+      results.push(...batchResults);
+      
+      if (i % (MAX_CONCURRENT_LOADS * 4) === 0) {
+        pruneMemoryCache();
+      }
+    }
     
     let offset = 4;
     for (let i = 0; i < totalRegions; i++) {
@@ -1037,6 +1068,8 @@ app.get('/api/batch-regions', async (req, res) => {
       
       offset += 12 + REGION_PIXEL_SIZE;
     }
+    
+    pruneMemoryCache();
     
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Length', buffer.length);
@@ -1117,6 +1150,14 @@ async function listDimensions(worldPath) {
       }
     }
   }
+  
+  const order = { '主世界': 0, 'null': 0, 'overworld': 0, '下界': 1, 'DIM-1': 1, 'minecraft:the_nether': 1, '末地': 2, 'DIM1': 2, 'minecraft:the_end': 2 };
+  dimensions.sort((a, b) => {
+    const orderA = order[a.name] ?? order[a.path] ?? 99;
+    const orderB = order[b.name] ?? order[b.path] ?? 99;
+    return orderA - orderB;
+  });
+  
   return dimensions;
 }
 

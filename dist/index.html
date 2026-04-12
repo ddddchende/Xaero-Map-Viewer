@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Xaero Map Viewer</title>
   <link rel="stylesheet" href="/styles/main.css">
-  <script type="module" crossorigin src="/assets/index-DTh-_TPC.js"></script>
+  <script type="module" crossorigin src="/assets/index-Rc2IZcXf.js"></script>
 </head>
 <body>
   <button id="toggleSidebar">☰</button>
@@ -34,16 +34,21 @@
           <label>地图目录</label>
           <div class="input-row">
             <input type="text" id="dirInput" placeholder="输入地图目录路径">
-            <button id="setDirBtn">设置</button>
+            <button id="selectDirBtn" class="btn-select">选择</button>
           </div>
+          <button id="setDirBtn" class="btn-confirm">确认更改目录</button>
         </div>
         <div class="control-group">
           <label>缓存目录</label>
           <div class="input-row">
             <input type="text" id="cacheDirInput" placeholder="默认: server/cache">
-            <button id="setCacheDirBtn">设置</button>
+            <button id="selectCacheDirBtn" class="btn-select">选择</button>
           </div>
-          <button id="clearCacheBtn" class="btn-small">清除缓存</button>
+          <button id="setCacheDirBtn" class="btn-confirm">确认更改目录</button>
+          <div class="cache-info">
+            <span id="cacheSize">计算中...</span>
+            <button id="clearCacheBtn">清除缓存</button>
+          </div>
         </div>
       </div>
       

@@ -184,6 +184,71 @@ body {
   margin-top: 4px;
 }
 
+.cache-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 0.85em;
+  color: #888;
+}
+
+.cache-info span {
+  flex: 1;
+  text-align: center;
+}
+
+.cache-info button {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid #666;
+  border-radius: 4px;
+  color: #888;
+  cursor: pointer;
+  font-size: 0.85em;
+  transition: all 0.2s;
+}
+
+.cache-info button:hover {
+  background: #444;
+  color: white;
+}
+
+.btn-select {
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid #666;
+  border-radius: 4px;
+  color: #888;
+  cursor: pointer;
+  font-size: 0.75em;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-select:hover {
+  background: #444;
+  color: white;
+}
+
+.btn-confirm {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 12px;
+  background: #333;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 0.85em;
+  transition: all 0.2s;
+}
+
+.btn-confirm:hover {
+  background: #444;
+  color: white;
+}
+
 .coord-inputs {
   display: flex;
   gap: 6px;

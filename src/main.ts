@@ -3,11 +3,20 @@ import { MapRenderer, ViewportBounds } from './renderer/MapRenderer';
 const DEFAULT_SERVER = 'localhost:3001';
 const STORAGE_KEY_DIR = 'xaero_map_directory';
 const STORAGE_KEY_SERVER = 'xaero_map_server';
+const STORAGE_KEY_MAP_STATE = 'xaero_map_state';
 const REGION_SIZE = 512;
 const cpuCores = navigator.hardwareConcurrency || 4;
 const CONCURRENT_LOADS = Math.max(1, cpuCores - 1);
 
 let API_BASE = `http://${DEFAULT_SERVER}/api`;
+
+interface MapState {
+  world: string | null;
+  dim: string | null;
+  mapType: string | null;
+  caveMode: number;
+  caveStart: number;
+}
 
 class XaeroMapViewer {
   private renderer: MapRenderer;
@@ -23,9 +32,12 @@ class XaeroMapViewer {
   private regionAccessTime: Map<string, number> = new Map();
   private isLoading: boolean = false;
   private abortController: AbortController | null = null;
+  private savedMapState: MapState | null = null;
+  private cacheSizeTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.loadServerConfig();
+    this.loadMapState();
     
     const canvas = document.getElementById('mapCanvas') as HTMLCanvasElement;
     this.renderer = new MapRenderer(canvas);
@@ -43,6 +55,28 @@ class XaeroMapViewer {
     const serverInput = document.getElementById('serverInput') as HTMLInputElement;
     if (serverInput) serverInput.value = savedServer;
     this.updateCurrentServerDisplay(savedServer);
+  }
+  
+  private loadMapState(): void {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_MAP_STATE);
+      if (saved) {
+        this.savedMapState = JSON.parse(saved);
+      }
+    } catch {
+      this.savedMapState = null;
+    }
+  }
+  
+  private saveMapState(): void {
+    const state: MapState = {
+      world: this.currentWorld,
+      dim: this.currentDim,
+      mapType: this.currentMapType,
+      caveMode: this.currentCaveMode,
+      caveStart: this.currentCaveStart
+    };
+    localStorage.setItem(STORAGE_KEY_MAP_STATE, JSON.stringify(state));
   }
   
   private updateCurrentServerDisplay(server: string): void {
@@ -148,6 +182,7 @@ class XaeroMapViewer {
       if (caveStartGroup) {
         caveStartGroup.style.display = this.currentCaveMode === 1 ? 'block' : 'none';
       }
+      this.saveMapState();
       this.loadRegionList();
     });
     
@@ -157,17 +192,49 @@ class XaeroMapViewer {
       this.currentCaveStart = value;
       const caveStartValue = document.getElementById('caveStartValue');
       if (caveStartValue) caveStartValue.textContent = value.toString();
+      this.saveMapState();
       this.loadRegionList();
     });
     
     const setCacheDirBtn = document.getElementById('setCacheDirBtn') as HTMLButtonElement;
     const cacheDirInput = document.getElementById('cacheDirInput') as HTMLInputElement;
     const clearCacheBtn = document.getElementById('clearCacheBtn') as HTMLButtonElement;
+    const selectDirBtn = document.getElementById('selectDirBtn') as HTMLButtonElement;
+    const selectCacheDirBtn = document.getElementById('selectCacheDirBtn') as HTMLButtonElement;
     
     setCacheDirBtn?.addEventListener('click', () => this.setCacheDirectory(cacheDirInput.value));
     clearCacheBtn?.addEventListener('click', () => this.clearCache());
     
+    selectDirBtn?.addEventListener('click', async () => {
+      try {
+        const dirHandle = await (window as unknown as { showDirectoryPicker?: () => Promise<{ name: string }> }).showDirectoryPicker?.();
+        if (dirHandle) {
+          dirInput.value = dirHandle.name;
+        }
+      } catch {
+        const path = prompt('请输入地图目录路径:', dirInput.value || '');
+        if (path !== null && path.trim()) {
+          dirInput.value = path.trim();
+        }
+      }
+    });
+    
+    selectCacheDirBtn?.addEventListener('click', async () => {
+      try {
+        const dirHandle = await (window as unknown as { showDirectoryPicker?: () => Promise<{ name: string }> }).showDirectoryPicker?.();
+        if (dirHandle) {
+          cacheDirInput.value = dirHandle.name;
+        }
+      } catch {
+        const path = prompt('请输入缓存目录路径:', cacheDirInput.value || '');
+        if (path !== null && path.trim()) {
+          cacheDirInput.value = path.trim();
+        }
+      }
+    });
+    
     this.loadCacheDirectory();
+    this.loadCacheSize();
     
     this.showLoading(false);
   }
@@ -192,6 +259,41 @@ class XaeroMapViewer {
     } catch {
       // ignore
     }
+  }
+
+  private formatCacheSize(sizeMB: number): string {
+    if (sizeMB < 1024) {
+      return `${sizeMB} MB`;
+    }
+    const gb = sizeMB / 1024;
+    if (gb < 10) {
+      return `${gb.toFixed(1)} GB`;
+    }
+    return `${Math.round(gb)} GB`;
+  }
+
+  private async loadCacheSize(): Promise<void> {
+    if (this.cacheSizeTimeout) {
+      clearTimeout(this.cacheSizeTimeout);
+    }
+    
+    this.cacheSizeTimeout = setTimeout(async () => {
+      try {
+        const response = await fetch(`${API_BASE}/cache-size`);
+        if (response.ok) {
+          const data = await response.json();
+          const cacheSizeEl = document.getElementById('cacheSize');
+          if (cacheSizeEl) {
+            cacheSizeEl.textContent = `缓存: ${this.formatCacheSize(data.sizeMB)}`;
+          }
+        }
+      } catch {
+        const cacheSizeEl = document.getElementById('cacheSize');
+        if (cacheSizeEl) {
+          cacheSizeEl.textContent = '缓存: 计算失败';
+        }
+      }
+    }, 500);
   }
 
   private async setCacheDirectory(directory: string): Promise<void> {
@@ -234,6 +336,7 @@ class XaeroMapViewer {
       }
       
       this.renderer.clearRegions();
+      this.loadCacheSize();
       alert('缓存已清除');
     } catch (error) {
       alert('清除缓存失败: ' + error);
@@ -307,7 +410,13 @@ class XaeroMapViewer {
       
       this.updateStatus(`找到 ${worlds.length} 个世界`);
       
-      if (autoSelect && worlds.length >= 1) {
+      const savedWorld = this.savedMapState?.world;
+      const savedWorldExists = savedWorld && worlds.includes(savedWorld);
+      
+      if (savedWorldExists) {
+        selector.value = savedWorld!;
+        await this.handleWorldChange(true);
+      } else if (autoSelect && worlds.length >= 1) {
         selector.value = worlds[0];
         await this.handleWorldChange(true);
       }
@@ -322,6 +431,7 @@ class XaeroMapViewer {
     
     if (!this.currentWorld) return;
     
+    this.saveMapState();
     this.updateStatus('正在加载维度...');
     
     try {
@@ -352,7 +462,13 @@ class XaeroMapViewer {
       
       this.updateStatus(`找到 ${dimensions.length} 个维度`);
       
-      if (autoSelect || dimensions.length === 1) {
+      const savedDim = this.savedMapState?.world === this.currentWorld ? this.savedMapState.dim : null;
+      const savedDimExists = savedDim && dimensions.some(d => d.path === savedDim);
+      
+      if (savedDimExists) {
+        dimSelector.value = savedDim!;
+        await this.handleDimChange(true);
+      } else if (autoSelect || dimensions.length === 1) {
         const overworld = dimensions.find(d => d.path === 'null' || d.name.includes('主世界') || d.name === 'Overworld');
         const toSelect = overworld || dimensions[0];
         dimSelector.value = toSelect.path;
@@ -374,6 +490,8 @@ class XaeroMapViewer {
     
     if (!this.currentWorld || !this.currentDim) return;
     
+    this.saveMapState();
+    
     this.renderer.clearRegions();
     this.allRegions = [];
     this.allRegionSet.clear();
@@ -391,7 +509,14 @@ class XaeroMapViewer {
       caveModeGroup.style.display = 'block';
     }
     
-    if (isNether && this.currentCaveMode === 0) {
+    const savedCaveMode = this.savedMapState?.dim === this.currentDim ? this.savedMapState.caveMode : null;
+    const savedCaveStart = this.savedMapState?.dim === this.currentDim ? this.savedMapState.caveStart : null;
+    
+    if (savedCaveMode !== null) {
+      this.currentCaveMode = savedCaveMode;
+      const caveModeSelector = document.getElementById('caveModeSelector') as HTMLSelectElement;
+      if (caveModeSelector) caveModeSelector.value = String(savedCaveMode);
+    } else if (isNether && this.currentCaveMode === 0) {
       this.currentCaveMode = 2;
       const caveModeSelector = document.getElementById('caveModeSelector') as HTMLSelectElement;
       if (caveModeSelector) caveModeSelector.value = '2';
@@ -401,6 +526,14 @@ class XaeroMapViewer {
       this.currentCaveMode = 0;
       const caveModeSelector = document.getElementById('caveModeSelector') as HTMLSelectElement;
       if (caveModeSelector) caveModeSelector.value = '0';
+    }
+    
+    if (savedCaveStart !== null && this.currentCaveMode === 1) {
+      this.currentCaveStart = savedCaveStart;
+      const caveStartSlider = document.getElementById('caveStartSlider') as HTMLInputElement;
+      const caveStartValue = document.getElementById('caveStartValue');
+      if (caveStartSlider) caveStartSlider.value = String(savedCaveStart);
+      if (caveStartValue) caveStartValue.textContent = String(savedCaveStart);
     }
     
     if (caveStartGroup) {
@@ -437,7 +570,14 @@ class XaeroMapViewer {
         mapTypeSelector.appendChild(option);
       }
       
-      if (autoSelect || this.mapTypes.length === 1) {
+      const savedMapType = this.savedMapState?.dim === this.currentDim ? this.savedMapState.mapType : null;
+      const savedMapTypeExists = savedMapType && this.mapTypes.some(m => m.path === savedMapType);
+      
+      if (savedMapTypeExists) {
+        mapTypeSelector.value = savedMapType!;
+        this.currentMapType = savedMapType;
+        await this.loadRegionList();
+      } else if (autoSelect || this.mapTypes.length === 1) {
         const defaultMap = this.mapTypes.find(m => m.path.includes('default') || m.name === '默认') || this.mapTypes[0];
         mapTypeSelector.value = defaultMap.path;
         this.currentMapType = defaultMap.path;
@@ -457,6 +597,8 @@ class XaeroMapViewer {
   private handleMapTypeChange(): void {
     const selector = document.getElementById('mapTypeSelector') as HTMLSelectElement;
     this.currentMapType = selector.value;
+    
+    this.saveMapState();
     
     if (this.currentMapType) {
       this.loadRegionList();
@@ -659,6 +801,7 @@ class XaeroMapViewer {
       
       this.renderer.render();
       this.updateStats();
+      this.loadCacheSize();
     } catch (e: unknown) {
       if (e instanceof Error && e.name === 'AbortError') {
         return;
@@ -691,6 +834,7 @@ class XaeroMapViewer {
         this.regionAccessTime.set(`${x},${z}`, Date.now());
         this.renderer.render();
         this.updateStats();
+        this.loadCacheSize();
       }
     } catch (e: unknown) {
       if (e instanceof Error && e.name === 'AbortError') {
