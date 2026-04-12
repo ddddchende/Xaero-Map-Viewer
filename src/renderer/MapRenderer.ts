@@ -1,5 +1,5 @@
 import type { MapRegion, MapBlock } from '../core/types';
-import { getBlockColor, isGrassBlock, isFoliageBlock, isWaterBlock } from '../data/blockColors';
+import { getBlockColor, getBlockAlpha, isGrassBlock, isFoliageBlock, isWaterBlock } from '../data/blockColors';
 import { getGrassColor, getFoliageColor, getWaterColor } from '../data/biomeColors';
 
 export interface RenderOptions {
@@ -21,26 +21,47 @@ const DEFAULT_OPTIONS: RenderOptions = {
   showWater: true
 };
 
-const MAX_CACHE_SIZE = 64;
-const LOD_LEVELS = [
-  { scale: 1, size: 512 },
-  { scale: 0.5, size: 256 },
-  { scale: 0.25, size: 128 },
-  { scale: 0.1, size: 64 },
-  { scale: 0.05, size: 32 },
-  { scale: 0, size: 16 }
-];
+const REGION_SIZE = 512;
 
-interface CacheEntry {
-  canvas: HTMLCanvasElement;
-  lastAccess: number;
-  lodLevel: number;
+const VERTEX_SHADER = `
+attribute vec4 a_data;
+
+uniform vec2 u_resolution;
+
+varying vec2 v_texCoord;
+
+void main() {
+  vec2 pos = a_data.xy;
+  vec2 clipSpace = (pos / u_resolution) * 2.0 - 1.0;
+  gl_Position = vec4(clipSpace * vec2(1, -1), 0, 1);
+  v_texCoord = a_data.zw;
+}
+`;
+
+const FRAGMENT_SHADER = `
+precision mediump float;
+
+varying vec2 v_texCoord;
+uniform sampler2D u_texture;
+
+void main() {
+  gl_FragColor = texture2D(u_texture, v_texCoord);
+}
+`;
+
+interface AtlasInfo {
+  texture: WebGLTexture;
+  freeSlots: number[];
+}
+
+interface SlotAllocation {
+  atlasIndex: number;
+  slotIndex: number;
 }
 
 export class MapRenderer {
   private canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
-  private regions: Map<string, MapRegion> = new Map();
+  private gl: WebGLRenderingContext;
   private options: RenderOptions = DEFAULT_OPTIONS;
   
   private offsetX: number = 0;
@@ -54,17 +75,82 @@ export class MapRenderer {
   private onViewportChange: ((bounds: ViewportBounds) => void) | null = null;
   private loadedRegionKeys: Set<string> = new Set();
   
-  private cache: Map<string, CacheEntry> = new Map();
   private renderQueued: boolean = false;
+  private currentLodLevel: number = 0;
+  
+  private atlasSize: number;
+  private slotsPerRow: number;
+  private slotsPerAtlas: number;
+  private atlases: AtlasInfo[] = [];
+  private regionSlots: Map<string, SlotAllocation> = new Map();
+  private slotLastAccess: Map<string, number> = new Map();
+  
+  private batchBuffer: WebGLBuffer;
+  private vertexData: Float32Array = new Float32Array(0);
+  
+  private program: WebGLProgram;
+  private dataLocation: number;
+  private resolutionLocation: WebGLUniformLocation;
+  private textureLocation: WebGLUniformLocation;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Failed to get 2D context');
-    this.ctx = ctx;
+    
+    const gl = canvas.getContext('webgl', {
+      alpha: false,
+      antialias: false,
+      preserveDrawingBuffer: true
+    });
+    
+    if (!gl) {
+      throw new Error('WebGL not supported');
+    }
+    
+    this.gl = gl;
+    
+    const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+    this.atlasSize = Math.min(4096, maxTextureSize);
+    this.slotsPerRow = this.atlasSize / REGION_SIZE;
+    this.slotsPerAtlas = this.slotsPerRow * this.slotsPerRow;
+    
+    this.program = this.createProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
+    
+    this.dataLocation = gl.getAttribLocation(this.program, 'a_data');
+    this.resolutionLocation = gl.getUniformLocation(this.program, 'u_resolution')!;
+    this.textureLocation = gl.getUniformLocation(this.program, 'u_texture')!;
+    
+    this.batchBuffer = gl.createBuffer()!;
     
     this.setupEventListeners();
     this.resize();
+  }
+
+  private createProgram(gl: WebGLRenderingContext, vsSource: string, fsSource: string): WebGLProgram {
+    const vs = this.compileShader(gl, gl.VERTEX_SHADER, vsSource);
+    const fs = this.compileShader(gl, gl.FRAGMENT_SHADER, fsSource);
+    
+    const program = gl.createProgram()!;
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      throw new Error('Program link failed: ' + gl.getProgramInfoLog(program));
+    }
+    
+    return program;
+  }
+
+  private compileShader(gl: WebGLRenderingContext, type: number, source: string): WebGLShader {
+    const shader = gl.createShader(type)!;
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      throw new Error('Shader compile failed: ' + gl.getShaderInfoLog(shader));
+    }
+    
+    return shader;
   }
 
   setOnViewportChange(callback: (bounds: ViewportBounds) => void): void {
@@ -90,11 +176,12 @@ export class MapRenderer {
     const worldZ = (mouseY - this.offsetZ) / this.scale;
     
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-    this.scale = Math.max(0.0625, Math.min(16, this.scale * zoomFactor));
+    this.scale = Math.max(0.005, Math.min(16, this.scale * zoomFactor));
     
     this.offsetX = mouseX - worldX * this.scale;
     this.offsetZ = mouseY - worldZ * this.scale;
     
+    this.updateLodLevel();
     this.scheduleRender();
     this.updateZoomDisplay();
     this.notifyViewportChange();
@@ -144,11 +231,10 @@ export class MapRenderer {
   }
 
   getViewportBounds(): ViewportBounds {
-    const regionSize = 512;
-    const startX = Math.floor(-this.offsetX / this.scale / regionSize) - 1;
-    const startZ = Math.floor(-this.offsetZ / this.scale / regionSize) - 1;
-    const endX = Math.ceil((this.canvas.width - this.offsetX) / this.scale / regionSize) + 1;
-    const endZ = Math.ceil((this.canvas.height - this.offsetZ) / this.scale / regionSize) + 1;
+    const startX = Math.floor(-this.offsetX / this.scale / REGION_SIZE) - 1;
+    const startZ = Math.floor(-this.offsetZ / this.scale / REGION_SIZE) - 1;
+    const endX = Math.ceil((this.canvas.width - this.offsetX) / this.scale / REGION_SIZE) + 1;
+    const endZ = Math.ceil((this.canvas.height - this.offsetZ) / this.scale / REGION_SIZE) + 1;
     
     return { startX, startZ, endX, endZ };
   }
@@ -163,11 +249,15 @@ export class MapRenderer {
   private updateZoomDisplay(): void {
     const zoomEl = document.getElementById('zoomLevel');
     if (zoomEl) {
-      zoomEl.textContent = `${this.scale.toFixed(2)}x`;
+      if (this.scale >= 1) {
+        zoomEl.textContent = `${this.scale.toFixed(1)}x`;
+      } else {
+        zoomEl.textContent = `${this.scale.toFixed(3)}x`;
+      }
     }
     const sliderEl = document.getElementById('zoomSlider') as HTMLInputElement;
     if (sliderEl) {
-      sliderEl.value = String(Math.round(Math.log2(this.scale)));
+      sliderEl.value = String(Math.log2(this.scale).toFixed(1));
     }
   }
 
@@ -177,6 +267,8 @@ export class MapRenderer {
     
     this.canvas.width = container.clientWidth;
     this.canvas.height = container.clientHeight;
+    
+    this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     this.scheduleRender();
   }
 
@@ -186,11 +278,12 @@ export class MapRenderer {
     const worldX = (centerX - this.offsetX) / this.scale;
     const worldZ = (centerZ - this.offsetZ) / this.scale;
     
-    this.scale = Math.max(0.0625, Math.min(16, scale));
+    this.scale = Math.max(0.005, Math.min(16, scale));
     
     this.offsetX = centerX - worldX * this.scale;
     this.offsetZ = centerZ - worldZ * this.scale;
     
+    this.updateLodLevel();
     this.scheduleRender();
     this.updateZoomDisplay();
     this.notifyViewportChange();
@@ -203,85 +296,124 @@ export class MapRenderer {
     this.notifyViewportChange();
   }
 
+  private updateLodLevel(): void {
+    let newLodLevel: number;
+    if (this.scale >= 0.5) {
+      newLodLevel = 0;
+    } else if (this.scale >= 0.35) {
+      newLodLevel = 1;
+    } else if (this.scale >= 0.2) {
+      newLodLevel = 2;
+    } else if (this.scale >= 0.1) {
+      newLodLevel = 3;
+    } else if (this.scale >= 0.05) {
+      newLodLevel = 4;
+    } else if (this.scale >= 0.025) {
+      newLodLevel = 5;
+    } else if (this.scale >= 0.01) {
+      newLodLevel = 6;
+    } else {
+      newLodLevel = 7;
+    }
+    
+    if (newLodLevel !== this.currentLodLevel) {
+      this.currentLodLevel = newLodLevel;
+    }
+  }
+
   addRegion(region: MapRegion): void {
     const key = `${region.regionX},${region.regionZ}`;
-    this.regions.set(key, region);
+    
+    const oldSlot = this.regionSlots.get(key);
+    if (oldSlot) {
+      this.atlases[oldSlot.atlasIndex].freeSlots.push(oldSlot.slotIndex);
+      this.regionSlots.delete(key);
+    }
+    
+    const pixelData = this.createRegionPixelData(region);
+    
+    const slot = this.allocateSlot(key);
+    if (!slot) return;
+    
+    this.uploadToAtlas(slot, pixelData);
+    
     this.loadedRegionKeys.add(key);
-    this.cache.delete(key);
+    this.slotLastAccess.set(key, Date.now());
   }
 
-  hasRegion(x: number, z: number): boolean {
-    return this.loadedRegionKeys.has(`${x},${z}`);
-  }
-
-  clearRegions(): void {
-    this.regions.clear();
-    this.loadedRegionKeys.clear();
-    this.cache.clear();
-  }
-
-  private getLodLevel(scale: number): number {
-    for (let i = 0; i < LOD_LEVELS.length; i++) {
-      if (scale >= LOD_LEVELS[i].scale) {
-        return i;
-      }
+  addRegionPixels(regionX: number, regionZ: number, pixelData: Uint8Array): void {
+    const key = `${regionX},${regionZ}`;
+    
+    const oldSlot = this.regionSlots.get(key);
+    if (oldSlot) {
+      this.atlases[oldSlot.atlasIndex].freeSlots.push(oldSlot.slotIndex);
+      this.regionSlots.delete(key);
     }
-    return LOD_LEVELS.length - 1;
+    
+    const slot = this.allocateSlot(key);
+    if (!slot) return;
+    
+    this.uploadToAtlas(slot, pixelData);
+    
+    this.loadedRegionKeys.add(key);
+    this.slotLastAccess.set(key, Date.now());
   }
 
-  private pruneCache(): void {
-    if (this.cache.size <= MAX_CACHE_SIZE) return;
-    
-    const entries = Array.from(this.cache.entries())
-      .sort((a, b) => a[1].lastAccess - b[1].lastAccess);
-    
-    const toRemove = entries.slice(0, this.cache.size - MAX_CACHE_SIZE);
-    for (const [key] of toRemove) {
-      this.cache.delete(key);
-    }
-  }
-
-  private getOrCreateCache(region: MapRegion, lodLevel: number): HTMLCanvasElement | null {
-    const key = `${region.regionX},${region.regionZ}`;
-    
-    const cached = this.cache.get(key);
-    if (cached) {
-      if (cached.lodLevel === lodLevel) {
-        cached.lastAccess = Date.now();
-        return cached.canvas;
+  private allocateSlot(key: string): SlotAllocation | null {
+    for (let i = 0; i < this.atlases.length; i++) {
+      if (this.atlases[i].freeSlots.length > 0) {
+        const slotIndex = this.atlases[i].freeSlots.pop()!;
+        const alloc: SlotAllocation = { atlasIndex: i, slotIndex };
+        this.regionSlots.set(key, alloc);
+        return alloc;
       }
     }
     
-    const canvas = this.createRegionCanvas(region, lodLevel);
-    if (!canvas) {
-      return cached ? cached.canvas : null;
-    }
-    
-    this.cache.set(key, {
-      canvas,
-      lastAccess: Date.now(),
-      lodLevel
-    });
-    this.pruneCache();
-    
-    return canvas;
+    this.createAtlas();
+    const slotIndex = this.atlases[this.atlases.length - 1].freeSlots.pop()!;
+    const alloc: SlotAllocation = { atlasIndex: this.atlases.length - 1, slotIndex };
+    this.regionSlots.set(key, alloc);
+    return alloc;
   }
 
-  private createRegionCanvas(region: MapRegion, lodLevel: number): HTMLCanvasElement | null {
-    const lodSize = LOD_LEVELS[lodLevel].size;
-    const scaleFactor = lodSize / 512;
+  private createAtlas(): void {
+    const gl = this.gl;
+    const texture = gl.createTexture()!;
     
-    const canvas = document.createElement('canvas');
-    canvas.width = lodSize;
-    canvas.height = lodSize;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.atlasSize, this.atlasSize, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
+    const freeSlots: number[] = [];
+    for (let i = this.slotsPerAtlas - 1; i >= 0; i--) {
+      freeSlots.push(i);
+    }
     
-    const imageData = ctx.createImageData(lodSize, lodSize);
-    const data = imageData.data;
+    this.atlases.push({ texture, freeSlots });
+  }
+
+  private uploadToAtlas(slot: SlotAllocation, pixelData: Uint8Array): void {
+    const gl = this.gl;
+    const atlas = this.atlases[slot.atlasIndex];
+    const col = slot.slotIndex % this.slotsPerRow;
+    const row = Math.floor(slot.slotIndex / this.slotsPerRow);
     
-    const step = Math.max(1, Math.round(512 / lodSize));
+    gl.bindTexture(gl.TEXTURE_2D, atlas.texture);
+    gl.texSubImage2D(
+      gl.TEXTURE_2D, 0,
+      col * REGION_SIZE, row * REGION_SIZE,
+      REGION_SIZE, REGION_SIZE,
+      gl.RGBA, gl.UNSIGNED_BYTE,
+      pixelData
+    );
+  }
+
+  private createRegionPixelData(region: MapRegion): Uint8Array {
+    const size = REGION_SIZE;
+    const pixelData = new Uint8Array(size * size * 4);
     
     for (let chunkX = 0; chunkX < 8; chunkX++) {
       for (let chunkZ = 0; chunkZ < 8; chunkZ++) {
@@ -293,26 +425,21 @@ export class MapRenderer {
             const tile = chunk.tiles[tileX]?.[tileZ];
             if (!tile || !tile.blocks) continue;
             
-            for (let x = 0; x < 16; x += step) {
-              for (let z = 0; z < 16; z += step) {
+            for (let x = 0; x < 16; x++) {
+              for (let z = 0; z < 16; z++) {
                 const block = tile.blocks[x]?.[z];
                 if (!block || !block.s) continue;
                 
-                const worldPixelX = chunkX * 64 + tileX * 16 + x;
-                const worldPixelZ = chunkZ * 64 + tileZ * 16 + z;
+                const pixelX = chunkX * 64 + tileX * 16 + x;
+                const pixelZ = chunkZ * 64 + tileZ * 16 + z;
                 
-                const pixelX = Math.floor(worldPixelX * scaleFactor);
-                const pixelZ = Math.floor(worldPixelZ * scaleFactor);
+                const idx = (pixelZ * size + pixelX) * 4;
+                const { color, alpha } = this.getBlockColorAndAlpha(block);
                 
-                if (pixelX >= lodSize || pixelZ >= lodSize) continue;
-                
-                const idx = (pixelZ * lodSize + pixelX) * 4;
-                const color = this.getBlockColor(block);
-                
-                data[idx] = (color >> 16) & 0xFF;
-                data[idx + 1] = (color >> 8) & 0xFF;
-                data[idx + 2] = color & 0xFF;
-                data[idx + 3] = 255;
+                pixelData[idx] = (color >> 16) & 0xFF;
+                pixelData[idx + 1] = (color >> 8) & 0xFF;
+                pixelData[idx + 2] = color & 0xFF;
+                pixelData[idx + 3] = alpha;
               }
             }
           }
@@ -320,8 +447,31 @@ export class MapRenderer {
       }
     }
     
-    ctx.putImageData(imageData, 0, 0);
-    return canvas;
+    return pixelData;
+  }
+
+  hasRegion(x: number, z: number): boolean {
+    return this.loadedRegionKeys.has(`${x},${z}`);
+  }
+
+  removeRegion(x: number, z: number): void {
+    const key = `${x},${z}`;
+    const slot = this.regionSlots.get(key);
+    if (slot) {
+      this.atlases[slot.atlasIndex].freeSlots.push(slot.slotIndex);
+      this.regionSlots.delete(key);
+    }
+    this.slotLastAccess.delete(key);
+    this.loadedRegionKeys.delete(key);
+  }
+
+  clearRegions(): void {
+    for (const slot of this.regionSlots.values()) {
+      this.atlases[slot.atlasIndex].freeSlots.push(slot.slotIndex);
+    }
+    this.regionSlots.clear();
+    this.slotLastAccess.clear();
+    this.loadedRegionKeys.clear();
   }
 
   private scheduleRender(): void {
@@ -339,60 +489,134 @@ export class MapRenderer {
   }
 
   private doRender(): void {
-    this.ctx.fillStyle = '#1a1a1a';
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    const gl = this.gl;
     
-    if (this.regions.size === 0) {
-      this.ctx.fillStyle = '#666';
-      this.ctx.font = '16px sans-serif';
-      this.ctx.textAlign = 'center';
-      this.ctx.fillText('请选择Xaero地图文件夹', this.canvas.width / 2, this.canvas.height / 2);
-      return;
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    
+    if (this.loadedRegionKeys.size === 0) return;
+    
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    
+    gl.useProgram(this.program);
+    gl.uniform2f(this.resolutionLocation, this.canvas.width, this.canvas.height);
+    gl.uniform1i(this.textureLocation, 0);
+    
+    gl.enableVertexAttribArray(this.dataLocation);
+    
+    this.renderBatched();
+  }
+
+  private renderBatched(): void {
+    const gl = this.gl;
+    const canvasW = this.canvas.width;
+    const canvasH = this.canvas.height;
+    const scale = this.scale;
+    const offX = this.offsetX;
+    const offZ = this.offsetZ;
+    const spr = this.slotsPerRow;
+    const now = Date.now();
+    
+    const atlasFloatCounts: Map<number, number> = new Map();
+    const atlasOffsets: Map<number, number> = new Map();
+    
+    let totalFloats = 0;
+    
+    for (const key of this.loadedRegionKeys) {
+      const slot = this.regionSlots.get(key);
+      if (!slot) continue;
+      
+      const sep = key.indexOf(',');
+      const rx = parseInt(key.substring(0, sep), 10);
+      const rz = parseInt(key.substring(sep + 1), 10);
+      
+      const screenX = rx * REGION_SIZE * scale + offX;
+      const screenZ = rz * REGION_SIZE * scale + offZ;
+      const size = REGION_SIZE * scale;
+      
+      if (screenX + size < 0 || screenX > canvasW ||
+          screenZ + size < 0 || screenZ > canvasH) continue;
+      
+      const count = (atlasFloatCounts.get(slot.atlasIndex) || 0) + 24;
+      atlasFloatCounts.set(slot.atlasIndex, count);
+      totalFloats += 24;
     }
     
-    this.ctx.imageSmoothingEnabled = false;
+    if (totalFloats === 0) return;
     
-    const bounds = this.getViewportBounds();
-    const lodLevel = this.getLodLevel(this.scale);
+    let accumOffset = 0;
+    const sortedAtlases = Array.from(atlasFloatCounts.keys()).sort((a, b) => a - b);
+    for (const ai of sortedAtlases) {
+      atlasOffsets.set(ai, accumOffset);
+      accumOffset += atlasFloatCounts.get(ai)!;
+    }
     
-    for (let rx = bounds.startX; rx <= bounds.endX; rx++) {
-      for (let rz = bounds.startZ; rz <= bounds.endZ; rz++) {
-        const key = `${rx},${rz}`;
-        const region = this.regions.get(key);
-        if (region) {
-          this.renderRegionCached(region, lodLevel);
-        }
-      }
+    const currentOffsets = new Map(atlasOffsets);
+    if (this.vertexData.length < totalFloats) {
+      this.vertexData = new Float32Array(totalFloats);
+    }
+    const data = this.vertexData;
+    
+    for (const key of this.loadedRegionKeys) {
+      const slot = this.regionSlots.get(key);
+      if (!slot) continue;
+      
+      const sep = key.indexOf(',');
+      const rx = parseInt(key.substring(0, sep), 10);
+      const rz = parseInt(key.substring(sep + 1), 10);
+      
+      const screenX = rx * REGION_SIZE * scale + offX;
+      const screenZ = rz * REGION_SIZE * scale + offZ;
+      const size = REGION_SIZE * scale;
+      
+      if (screenX + size < 0 || screenX > canvasW ||
+          screenZ + size < 0 || screenZ > canvasH) continue;
+      
+      const col = slot.slotIndex % spr;
+      const row = Math.floor(slot.slotIndex / spr);
+      const u0 = col / spr;
+      const v0 = row / spr;
+      const u1 = (col + 1) / spr;
+      const v1 = (row + 1) / spr;
+      
+      const sx2 = screenX + size;
+      const sz2 = screenZ + size;
+      
+      const o = currentOffsets.get(slot.atlasIndex)!;
+      currentOffsets.set(slot.atlasIndex, o + 24);
+      
+      data[o]    = screenX; data[o+1]  = screenZ; data[o+2]  = u0; data[o+3]  = v0;
+      data[o+4]  = sx2;     data[o+5]  = screenZ; data[o+6]  = u1; data[o+7]  = v0;
+      data[o+8]  = screenX; data[o+9]  = sz2;     data[o+10] = u0; data[o+11] = v1;
+      data[o+12] = screenX; data[o+13] = sz2;     data[o+14] = u0; data[o+15] = v1;
+      data[o+16] = sx2;     data[o+17] = screenZ; data[o+18] = u1; data[o+19] = v0;
+      data[o+20] = sx2;     data[o+21] = sz2;     data[o+22] = u1; data[o+23] = v1;
+      
+      this.slotLastAccess.set(key, now);
+    }
+    
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.batchBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, totalFloats), gl.DYNAMIC_DRAW);
+    
+    gl.vertexAttribPointer(this.dataLocation, 4, gl.FLOAT, false, 0, 0);
+    
+    for (const ai of sortedAtlases) {
+      const offset = atlasOffsets.get(ai)!;
+      const count = atlasFloatCounts.get(ai)!;
+      
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.atlases[ai].texture);
+      
+      gl.drawArrays(gl.TRIANGLES, offset / 4, count / 4);
     }
   }
 
-  private renderRegionCached(region: MapRegion, lodLevel: number): void {
-    const cache = this.getOrCreateCache(region, lodLevel);
-    
-    const regionWorldX = region.regionX * 512;
-    const regionWorldZ = region.regionZ * 512;
-    
-    const screenX = regionWorldX * this.scale + this.offsetX;
-    const screenZ = regionWorldZ * this.scale + this.offsetZ;
-    const screenSize = 512 * this.scale;
-    
-    if (screenX + screenSize < 0 || screenX > this.canvas.width ||
-        screenZ + screenSize < 0 || screenZ > this.canvas.height) {
-      return;
-    }
-    
-    if (cache) {
-      this.ctx.drawImage(cache, screenX, screenZ, screenSize, screenSize);
-    } else {
-      this.ctx.fillStyle = '#2a2a2a';
-      this.ctx.fillRect(screenX, screenZ, screenSize, screenSize);
-    }
-  }
-
-  private getBlockColor(block: MapBlock): number {
-    if (!block.s) return 0x000000;
+  private getBlockColorAndAlpha(block: MapBlock): { color: number; alpha: number } {
+    if (!block.s) return { color: 0x000000, alpha: 0 };
     
     let color = getBlockColor(block.s);
+    let alpha = getBlockAlpha(block.s);
     
     if (isGrassBlock(block.s)) {
       color = getGrassColor(block.b);
@@ -400,6 +624,7 @@ export class MapRenderer {
       color = getFoliageColor(block.b);
     } else if (isWaterBlock(block.s)) {
       color = getWaterColor(block.b);
+      alpha = 180;
     }
     
     if (this.options.showLighting && block.l < 15) {
@@ -410,24 +635,14 @@ export class MapRenderer {
       color = (r << 16) | (g << 8) | b;
     }
     
-    return color;
+    return { color, alpha };
   }
 
-  getStats(): { regionCount: number; loadedPixels: number; cacheSize: number } {
-    let loadedPixels = 0;
-    for (const region of this.regions.values()) {
-      for (let cx = 0; cx < 8; cx++) {
-        for (let cz = 0; cz < 8; cz++) {
-          if (region.chunks[cx]?.[cz]) {
-            loadedPixels += 64 * 64;
-          }
-        }
-      }
-    }
+  getStats(): { regionCount: number; atlasCount: number; lodLevel: number } {
     return {
-      regionCount: this.regions.size,
-      loadedPixels,
-      cacheSize: this.cache.size
+      regionCount: this.loadedRegionKeys.size,
+      atlasCount: this.atlases.length,
+      lodLevel: this.currentLodLevel
     };
   }
 }

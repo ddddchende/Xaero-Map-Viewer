@@ -18,6 +18,13 @@
         <button id="setDirBtn">设置目录</button>
       </div>
       
+      <div class="control-group">
+        <label>缓存目录:</label>
+        <input type="text" id="cacheDirInput" placeholder="默认: server/cache">
+        <button id="setCacheDirBtn">设置</button>
+        <button id="clearCacheBtn" class="secondary">清除缓存</button>
+      </div>
+      
       <div class="control-group" id="worldSelect" style="display:none;">
         <label>世界:</label>
         <select id="worldSelector"></select>
@@ -39,7 +46,7 @@
       
       <div class="control-group">
         <label>缩放: <span id="zoomLevel">1x</span></label>
-        <input type="range" id="zoomSlider" min="-4" max="4" value="0" step="1">
+        <input type="range" id="zoomSlider" min="-8" max="4" value="0" step="0.5">
       </div>
       
       <div class="control-group">

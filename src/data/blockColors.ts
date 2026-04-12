@@ -295,6 +295,11 @@ export function getBlockColor(blockName: string): number {
   return 0xff00ff;
 }
 
+export function getBlockAlpha(blockName: string): number {
+  const info = BLOCK_COLORS[blockName];
+  return info?.alpha ?? 255;
+}
+
 export function isGrassBlock(blockName: string): boolean {
   const info = BLOCK_COLORS[blockName];
   return info?.grass ?? false;

@@ -91,6 +91,16 @@ body {
   background: #ff6b6b;
 }
 
+.control-group button.secondary {
+  background: #0f3460;
+  border: 1px solid #e94560;
+  margin-left: 8px;
+}
+
+.control-group button.secondary:hover {
+  background: #1a4a7a;
+}
+
 .coord-inputs {
   display: flex;
   gap: 8px;

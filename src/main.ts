@@ -1,10 +1,10 @@
 import { MapRenderer, ViewportBounds } from './renderer/MapRenderer';
-import type { MapRegion } from './core/types';
 
 const API_BASE = 'http://localhost:3001/api';
-const MAX_LOADED_REGIONS = 100;
-const CONCURRENT_LOADS = 4;
+const cpuCores = navigator.hardwareConcurrency || 4;
+const CONCURRENT_LOADS = Math.max(1, cpuCores - 1);
 const STORAGE_KEY_DIR = 'xaero_map_directory';
+const REGION_SIZE = 512;
 
 class XaeroMapViewer {
   private renderer: MapRenderer;
@@ -12,12 +12,11 @@ class XaeroMapViewer {
   private currentDim: string | null = null;
   private currentMapType: string | null = null;
   private allRegions: {x: number, z: number}[] = [];
+  private allRegionSet: Set<string> = new Set();
   private loadingRegions: Set<string> = new Set();
   private mapTypes: {name: string, path: string}[] = [];
   private regionAccessTime: Map<string, number> = new Map();
   private isLoading: boolean = false;
-  private loadQueue: Array<() => Promise<void>> = [];
-  private activeLoads: number = 0;
 
   constructor() {
     const canvas = document.getElementById('mapCanvas') as HTMLCanvasElement;
@@ -27,7 +26,15 @@ class XaeroMapViewer {
     
     this.setupUI();
     this.loadCachedDirectory();
-    setInterval(() => this.unloadOldRegions(), 10000);
+    this.startAutoLoad();
+  }
+
+  private startAutoLoad(): void {
+    window.setInterval(() => {
+      if (this.currentWorld && this.currentDim) {
+        this.loadVisibleRegions();
+      }
+    }, 500);
   }
 
   private loadCachedDirectory(): void {
@@ -39,34 +46,6 @@ class XaeroMapViewer {
       this.setDirectory(cachedDir, true);
     } else {
       this.checkServerConnection();
-    }
-  }
-
-  private unloadOldRegions(): void {
-    if (this.allRegions.length === 0) return;
-    
-    const now = Date.now();
-    const bounds = this.renderer.getViewportBounds();
-    const visibleKeys = new Set<string>();
-    
-    for (let x = bounds.startX; x <= bounds.endX; x++) {
-      for (let z = bounds.startZ; z <= bounds.endZ; z++) {
-        visibleKeys.add(`${x},${z}`);
-      }
-    }
-    
-    const toUnload: string[] = [];
-    for (const [key, time] of this.regionAccessTime) {
-      if (!visibleKeys.has(key) && now - time > 30000) {
-        toUnload.push(key);
-      }
-    }
-    
-    if (toUnload.length > 0) {
-      console.log(`Unloading ${toUnload.length} old regions`);
-      for (const key of toUnload) {
-        this.regionAccessTime.delete(key);
-      }
     }
   }
 
@@ -94,11 +73,20 @@ class XaeroMapViewer {
     dimSelector?.addEventListener('change', () => this.handleDimChange());
     mapTypeSelector?.addEventListener('change', () => this.handleMapTypeChange());
     zoomSlider?.addEventListener('input', (e) => {
-      const value = parseInt((e.target as HTMLInputElement).value, 10);
+      const value = parseFloat((e.target as HTMLInputElement).value);
       this.renderer.setScale(Math.pow(2, value));
     });
     gotoBtn?.addEventListener('click', () => this.handleGotoCoords());
     setDirBtn?.addEventListener('click', () => this.setDirectory(dirInput.value, false));
+    
+    const setCacheDirBtn = document.getElementById('setCacheDirBtn') as HTMLButtonElement;
+    const cacheDirInput = document.getElementById('cacheDirInput') as HTMLInputElement;
+    const clearCacheBtn = document.getElementById('clearCacheBtn') as HTMLButtonElement;
+    
+    setCacheDirBtn?.addEventListener('click', () => this.setCacheDirectory(cacheDirInput.value));
+    clearCacheBtn?.addEventListener('click', () => this.clearCache());
+    
+    this.loadCacheDirectory();
     
     this.showLoading(false);
   }
@@ -107,6 +95,67 @@ class XaeroMapViewer {
     const statusEl = document.getElementById('status');
     if (statusEl) {
       statusEl.textContent = message;
+    }
+  }
+
+  private async loadCacheDirectory(): Promise<void> {
+    try {
+      const response = await fetch(`${API_BASE}/cache-directory`);
+      if (response.ok) {
+        const data = await response.json();
+        const cacheDirInput = document.getElementById('cacheDirInput') as HTMLInputElement;
+        if (cacheDirInput && data.directory) {
+          cacheDirInput.value = data.directory;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private async setCacheDirectory(directory: string): Promise<void> {
+    if (!directory) {
+      alert('请输入缓存目录路径');
+      return;
+    }
+    
+    try {
+      const response = await fetch(`${API_BASE}/set-cache-directory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directory })
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        alert(error.error || '设置缓存目录失败');
+        return;
+      }
+      
+      alert('缓存目录已设置');
+    } catch (error) {
+      alert('设置缓存目录失败: ' + error);
+    }
+  }
+
+  private async clearCache(): Promise<void> {
+    if (!confirm('确定要清除所有缓存吗？')) return;
+    
+    try {
+      const response = await fetch(`${API_BASE}/cache-directory`, {
+        method: 'DELETE'
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        alert(error.error || '清除缓存失败');
+        return;
+      }
+      
+      this.renderer.clearRegions();
+      alert('缓存已清除');
+    } catch (error) {
+      alert('清除缓存失败: ' + error);
     }
   }
 
@@ -281,12 +330,12 @@ class XaeroMapViewer {
     }
   }
 
-  private async handleMapTypeChange(): Promise<void> {
+  private handleMapTypeChange(): void {
     const selector = document.getElementById('mapTypeSelector') as HTMLSelectElement;
     this.currentMapType = selector.value;
     
     if (this.currentMapType) {
-      await this.loadRegionList();
+      this.loadRegionList();
     }
   }
 
@@ -296,9 +345,9 @@ class XaeroMapViewer {
     this.showLoading(true);
     this.renderer.clearRegions();
     this.allRegions = [];
+    this.allRegionSet.clear();
     this.loadingRegions.clear();
     this.regionAccessTime.clear();
-    this.loadQueue = [];
     
     try {
       let url = `${API_BASE}/worlds/${encodeURIComponent(this.currentWorld)}/dimensions/${encodeURIComponent(this.currentDim)}/regions`;
@@ -309,6 +358,11 @@ class XaeroMapViewer {
       const response = await fetch(url);
       const data = await response.json();
       this.allRegions = data.regions || [];
+      
+      this.allRegionSet.clear();
+      for (const r of this.allRegions) {
+        this.allRegionSet.add(`${r.x},${r.z}`);
+      }
       
       if (data.mapType) {
         this.currentMapType = data.mapType;
@@ -333,24 +387,6 @@ class XaeroMapViewer {
   private loadVisibleRegions(): void {
     if (!this.currentWorld || !this.currentDim) return;
     
-    const stats = this.renderer.getStats();
-    const currentCount = stats.regionCount;
-    
-    if (currentCount >= MAX_LOADED_REGIONS) {
-      const keys = Array.from(this.regionAccessTime.entries())
-        .filter(([key]) => {
-          const bounds = this.renderer.getViewportBounds();
-          const [x, z] = key.split(',').map(Number);
-          return x < bounds.startX || x > bounds.endX || z < bounds.startZ || z > bounds.endZ;
-        })
-        .sort((a, b) => a[1] - b[1]);
-      
-      const toUnload = keys.slice(0, Math.min(10, keys.length));
-      for (const [key] of toUnload) {
-        this.regionAccessTime.delete(key);
-      }
-    }
-    
     const bounds = this.renderer.getViewportBounds();
     
     for (let x = bounds.startX; x <= bounds.endX; x++) {
@@ -362,19 +398,18 @@ class XaeroMapViewer {
       }
     }
     
-    const regionsToLoad: {x: number, z: number}[] = [];
+    const centerRegionX = Math.floor((this.canvasWidth() / 2 - this.rendererOffsetX()) / REGION_SIZE / this.rendererScale());
+    const centerRegionZ = Math.floor((this.canvasHeight() / 2 - this.rendererOffsetZ()) / REGION_SIZE / this.rendererScale());
+    
+    const regionsToLoad: {x: number, z: number, dist: number}[] = [];
     
     for (let x = bounds.startX; x <= bounds.endX; x++) {
       for (let z = bounds.startZ; z <= bounds.endZ; z++) {
         const key = `${x},${z}`;
         if (!this.renderer.hasRegion(x, z) && !this.loadingRegions.has(key)) {
-          if (this.allRegions.length === 0) {
-            regionsToLoad.push({x, z});
-          } else {
-            const existsInList = this.allRegions.some(r => r.x === x && r.z === z);
-            if (existsInList) {
-              regionsToLoad.push({x, z});
-            }
+          if (this.allRegionSet.size === 0 || this.allRegionSet.has(key)) {
+            const dist = Math.abs(x - centerRegionX) + Math.abs(z - centerRegionZ);
+            regionsToLoad.push({x, z, dist});
           }
         }
       }
@@ -382,63 +417,126 @@ class XaeroMapViewer {
     
     if (regionsToLoad.length === 0) return;
     
-    const availableSlots = MAX_LOADED_REGIONS - this.renderer.getStats().regionCount;
-    if (availableSlots <= 0) return;
+    regionsToLoad.sort((a, b) => a.dist - b.dist);
     
-    const toLoad = regionsToLoad.slice(0, Math.min(availableSlots, CONCURRENT_LOADS * 2));
+    const toLoad = regionsToLoad.slice(0, CONCURRENT_LOADS * 3);
     
-    for (const region of toLoad) {
-      this.queueLoad(region.x, region.z);
+    this.loadRegionsBatch(toLoad.map(r => ({x: r.x, z: r.z})));
+  }
+
+  private canvasWidth(): number {
+    const canvas = document.getElementById('mapCanvas') as HTMLCanvasElement;
+    return canvas?.width || 0;
+  }
+
+  private canvasHeight(): number {
+    const canvas = document.getElementById('mapCanvas') as HTMLCanvasElement;
+    return canvas?.height || 0;
+  }
+
+  private rendererOffsetX(): number {
+    return 0;
+  }
+
+  private rendererOffsetZ(): number {
+    return 0;
+  }
+
+  private rendererScale(): number {
+    return 1;
+  }
+
+  private async loadRegionsBatch(regions: {x: number, z: number}[]): Promise<void> {
+    if (regions.length === 0) return;
+    
+    if (regions.length === 1) {
+      const {x, z} = regions[0];
+      const key = `${x},${z}`;
+      if (this.loadingRegions.has(key)) return;
+      this.loadingRegions.add(key);
+      
+      try {
+        await this.loadSingleRegionPixels(x, z);
+      } finally {
+        this.loadingRegions.delete(key);
+      }
+      return;
     }
     
-    this.processQueue();
-  }
-
-  private queueLoad(x: number, z: number): void {
-    const key = `${x},${z}`;
-    if (this.loadingRegions.has(key)) return;
+    const toLoad = regions.filter(r => !this.loadingRegions.has(`${r.x},${r.z}`));
+    if (toLoad.length === 0) return;
     
-    this.loadingRegions.add(key);
+    for (const r of toLoad) {
+      this.loadingRegions.add(`${r.x},${r.z}`);
+    }
     
-    this.loadQueue.push(async () => {
-      await this.loadSingleRegion(x, z);
-    });
-  }
-
-  private async processQueue(): Promise<void> {
-    while (this.loadQueue.length > 0 && this.activeLoads < CONCURRENT_LOADS) {
-      const task = this.loadQueue.shift();
-      if (task) {
-        this.activeLoads++;
-        task().finally(() => {
-          this.activeLoads--;
-          this.processQueue();
-        });
+    try {
+      const coordsStr = toLoad.map(r => `${r.x},${r.z}`).join(';');
+      let url = `${API_BASE}/batch-regions?world=${encodeURIComponent(this.currentWorld!)}&dim=${encodeURIComponent(this.currentDim!)}&coords=${encodeURIComponent(coordsStr)}`;
+      if (this.currentMapType) {
+        url += `&mapType=${encodeURIComponent(this.currentMapType)}`;
+      }
+      
+      const response = await fetch(url);
+      if (!response.ok) {
+        for (const r of toLoad) {
+          this.loadingRegions.delete(`${r.x},${r.z}`);
+        }
+        return;
+      }
+      
+      const buffer = await response.arrayBuffer();
+      const view = new DataView(buffer);
+      
+      const totalRegions = view.getUint32(0, true);
+      let offset = 4;
+      
+      const REGION_PIXEL_SIZE = REGION_SIZE * REGION_SIZE * 4;
+      
+      for (let i = 0; i < totalRegions; i++) {
+        const rx = view.getInt32(offset, true);
+        const rz = view.getInt32(offset + 4, true);
+        const exists = view.getUint32(offset + 8, true);
+        offset += 12;
+        
+        if (exists) {
+          const pixelData = new Uint8Array(buffer, offset, REGION_PIXEL_SIZE);
+          this.renderer.addRegionPixels(rx, rz, pixelData);
+          const key = `${rx},${rz}`;
+          this.regionAccessTime.set(key, Date.now());
+        }
+        
+        offset += REGION_PIXEL_SIZE;
+      }
+      
+      this.renderer.render();
+      this.updateStats();
+    } catch (e) {
+      console.error('Batch load error:', e);
+    } finally {
+      for (const r of toLoad) {
+        this.loadingRegions.delete(`${r.x},${r.z}`);
       }
     }
   }
 
-  private async loadSingleRegion(x: number, z: number): Promise<void> {
-    const key = `${x},${z}`;
-    
+  private async loadSingleRegionPixels(x: number, z: number): Promise<void> {
     try {
-      let url = `${API_BASE}/region?world=${encodeURIComponent(this.currentWorld!)}&dim=${encodeURIComponent(this.currentDim!)}&x=${x}&z=${z}`;
+      let url = `${API_BASE}/region-pixels?world=${encodeURIComponent(this.currentWorld!)}&dim=${encodeURIComponent(this.currentDim!)}&x=${x}&z=${z}`;
       if (this.currentMapType) {
         url += `&mapType=${encodeURIComponent(this.currentMapType)}`;
       }
       
       const response = await fetch(url);
       if (response.ok) {
-        const region: MapRegion = await response.json();
-        this.renderer.addRegion(region);
-        this.regionAccessTime.set(key, Date.now());
+        const pixelData = new Uint8Array(await response.arrayBuffer());
+        this.renderer.addRegionPixels(x, z, pixelData);
+        this.regionAccessTime.set(`${x},${z}`, Date.now());
         this.renderer.render();
         this.updateStats();
       }
     } catch (e) {
       console.error(`Failed to load region ${x},${z}:`, e);
-    } finally {
-      this.loadingRegions.delete(key);
     }
   }
 
@@ -466,11 +564,12 @@ class XaeroMapViewer {
   private updateStats(): void {
     const stats = document.getElementById('stats');
     if (stats) {
-      const { regionCount, loadedPixels, cacheSize } = this.renderer.getStats();
+      const { regionCount, atlasCount, lodLevel } = this.renderer.getStats();
       stats.innerHTML = `
         <div>已加载区域: ${regionCount} / ${this.allRegions.length}</div>
-        <div>缓存: ${cacheSize}</div>
-        <div>像素数: ${loadedPixels.toLocaleString()}</div>
+        <div>纹理图集: ${atlasCount}</div>
+        <div>LOD: ${lodLevel}</div>
+        <div>并发加载: ${CONCURRENT_LOADS} (核心: ${cpuCores})</div>
       `;
     }
   }
