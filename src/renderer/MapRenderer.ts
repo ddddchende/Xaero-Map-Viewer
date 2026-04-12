@@ -62,6 +62,8 @@ interface SlotAllocation {
 export class MapRenderer {
   private canvas: HTMLCanvasElement;
   private gl: WebGLRenderingContext;
+  private overlayCanvas: HTMLCanvasElement;
+  private overlayCtx: CanvasRenderingContext2D;
   private options: RenderOptions = DEFAULT_OPTIONS;
   
   private offsetX: number = 0;
@@ -71,6 +73,8 @@ export class MapRenderer {
   private isDragging: boolean = false;
   private lastMouseX: number = 0;
   private lastMouseY: number = 0;
+  private mouseWorldX: number | null = null;
+  private mouseWorldZ: number | null = null;
   
   private onViewportChange: ((bounds: ViewportBounds) => void) | null = null;
   private loadedRegionKeys: Set<string> = new Set();
@@ -107,6 +111,16 @@ export class MapRenderer {
     }
     
     this.gl = gl;
+    
+    this.overlayCanvas = document.createElement('canvas');
+    this.overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
+    canvas.parentElement?.appendChild(this.overlayCanvas);
+    
+    const ctx = this.overlayCanvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('2D context not supported');
+    }
+    this.overlayCtx = ctx;
     
     const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
     this.atlasSize = Math.min(4096, maxTextureSize);
@@ -204,6 +218,9 @@ export class MapRenderer {
     const worldX = Math.floor((mouseX - this.offsetX) / this.scale);
     const worldZ = Math.floor((mouseY - this.offsetZ) / this.scale);
     
+    this.mouseWorldX = worldX;
+    this.mouseWorldZ = worldZ;
+    
     this.updateCoordsDisplay(worldX, worldZ);
     
     if (this.isDragging) {
@@ -215,6 +232,8 @@ export class MapRenderer {
       this.lastMouseY = e.clientY;
       this.scheduleRender();
       this.notifyViewportChange();
+    } else {
+      this.scheduleRender();
     }
   }
 
@@ -267,6 +286,9 @@ export class MapRenderer {
     
     this.canvas.width = container.clientWidth;
     this.canvas.height = container.clientHeight;
+    
+    this.overlayCanvas.width = container.clientWidth;
+    this.overlayCanvas.height = container.clientHeight;
     
     this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     this.scheduleRender();
@@ -494,7 +516,10 @@ export class MapRenderer {
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     
-    if (this.loadedRegionKeys.size === 0) return;
+    if (this.loadedRegionKeys.size === 0) {
+      this.renderOverlay();
+      return;
+    }
     
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -506,6 +531,32 @@ export class MapRenderer {
     gl.enableVertexAttribArray(this.dataLocation);
     
     this.renderBatched();
+    this.renderOverlay();
+  }
+  
+  private renderOverlay(): void {
+    const ctx = this.overlayCtx;
+    const w = this.overlayCanvas.width;
+    const h = this.overlayCanvas.height;
+    
+    ctx.clearRect(0, 0, w, h);
+    
+    if (this.mouseWorldX !== null && this.mouseWorldZ !== null) {
+      const text = `X: ${this.mouseWorldX}, Z: ${this.mouseWorldZ}`;
+      
+      ctx.font = 'bold 16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      
+      const x = w / 2;
+      const y = 10;
+      
+      ctx.fillStyle = 'black';
+      ctx.fillText(text, x + 2, y + 2);
+      
+      ctx.fillStyle = 'white';
+      ctx.fillText(text, x, y);
+    }
   }
 
   private renderBatched(): void {

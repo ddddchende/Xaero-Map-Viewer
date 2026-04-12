@@ -2,60 +2,102 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Xaero Map Viewer</title>
   <link rel="stylesheet" href="/styles/main.css">
-  <script type="module" crossorigin src="/assets/index-DEsMYV3h.js"></script>
+  <script type="module" crossorigin src="/assets/index-DTh-_TPC.js"></script>
 </head>
 <body>
+  <button id="toggleSidebar">☰</button>
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+  
   <div id="app">
     <div id="sidebar">
       <h2>Xaero Map Viewer</h2>
       <div id="status" class="status">正在连接服务器...</div>
       
-      <div class="control-group">
-        <label>地图目录路径:</label>
-        <input type="text" id="dirInput" placeholder="例如: C:\Users\xxx\.minecraft\XaeroWorldMap">
-        <button id="setDirBtn">设置目录</button>
+      <div class="section">
+        <div class="section-title">连接设置</div>
+        <div class="control-group">
+          <label>服务端地址</label>
+          <div class="input-row">
+            <input type="text" id="serverInput" placeholder="例如: localhost:3001 或 192.168.1.100:3001">
+            <button id="setServerBtn">连接</button>
+          </div>
+          <div class="hint" id="currentServer">当前: localhost:3001</div>
+        </div>
       </div>
       
-      <div class="control-group">
-        <label>缓存目录:</label>
-        <input type="text" id="cacheDirInput" placeholder="默认: server/cache">
-        <button id="setCacheDirBtn">设置</button>
-        <button id="clearCacheBtn" class="secondary">清除缓存</button>
+      <div class="section">
+        <div class="section-title">目录设置</div>
+        <div class="control-group">
+          <label>地图目录</label>
+          <div class="input-row">
+            <input type="text" id="dirInput" placeholder="输入地图目录路径">
+            <button id="setDirBtn">设置</button>
+          </div>
+        </div>
+        <div class="control-group">
+          <label>缓存目录</label>
+          <div class="input-row">
+            <input type="text" id="cacheDirInput" placeholder="默认: server/cache">
+            <button id="setCacheDirBtn">设置</button>
+          </div>
+          <button id="clearCacheBtn" class="btn-small">清除缓存</button>
+        </div>
       </div>
       
-      <div class="control-group" id="worldSelect" style="display:none;">
-        <label>世界:</label>
-        <select id="worldSelector"></select>
+      <div class="section" id="worldSection" style="display:none;">
+        <div class="section-title">世界选择</div>
+        <div class="control-group">
+          <label>世界</label>
+          <select id="worldSelector"></select>
+        </div>
+        <div class="control-group">
+          <label>维度</label>
+          <select id="dimSelector"></select>
+        </div>
+        <div class="control-group">
+          <label>地图类型</label>
+          <select id="mapTypeSelector"></select>
+        </div>
+        <div class="control-group" id="caveModeGroup" style="display:none;">
+          <label>洞穴模式</label>
+          <select id="caveModeSelector">
+            <option value="0">关闭</option>
+            <option value="1">分层</option>
+            <option value="2">完整</option>
+          </select>
+        </div>
+        <div class="control-group" id="caveStartGroup" style="display:none;">
+          <div class="inline-label">
+            <label>洞穴Y高度</label>
+            <span id="caveStartValue" class="value">64</span>
+          </div>
+          <input type="range" id="caveStartSlider" min="-64" max="320" value="64" step="1">
+        </div>
       </div>
       
-      <div class="control-group" id="dimSelect" style="display:none;">
-        <label>维度:</label>
-        <select id="dimSelector"></select>
-      </div>
-      
-      <div class="control-group" id="mapTypeSelect" style="display:none;">
-        <label>地图类型:</label>
-        <select id="mapTypeSelector"></select>
-      </div>
-      
-      <div class="control-group">
-        <label>坐标: <span id="coords">-</span></label>
-      </div>
-      
-      <div class="control-group">
-        <label>缩放: <span id="zoomLevel">1x</span></label>
-        <input type="range" id="zoomSlider" min="-8" max="4" value="0" step="0.5">
-      </div>
-      
-      <div class="control-group">
-        <label>跳转坐标:</label>
-        <div class="coord-inputs">
-          <input type="text" id="targetX" placeholder="X">
-          <input type="text" id="targetZ" placeholder="Z">
-          <button id="gotoCoords">跳转</button>
+      <div class="section">
+        <div class="section-title">视图控制</div>
+        <div class="control-group inline">
+          <label>坐标</label>
+          <span id="coords" class="value">-</span>
+        </div>
+        <div class="control-group">
+          <div class="inline-label">
+            <label>缩放</label>
+            <span id="zoomLevel" class="value">1x</span>
+          </div>
+          <input type="range" id="zoomSlider" min="-8" max="4" value="0" step="0.5">
+        </div>
+        <div class="control-group">
+          <label>跳转坐标</label>
+          <div class="coord-inputs">
+            <input type="text" id="targetX" placeholder="X">
+            <input type="text" id="targetZ" placeholder="Z">
+            <button id="gotoCoords">跳转</button>
+          </div>
         </div>
       </div>
       

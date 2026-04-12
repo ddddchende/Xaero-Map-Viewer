@@ -2,3 +2,4 @@ node_modules
 \[Xaero的世界地图\] xaeroworldmap-fabric-1.21.1-1.40.8.jar
 server/block
 server/cache
+server/config.json
