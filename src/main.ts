@@ -4,9 +4,9 @@ const DEFAULT_SERVER = 'localhost:3001';
 const STORAGE_KEY_DIR = 'xaero_map_directory';
 const STORAGE_KEY_SERVER = 'xaero_map_server';
 const STORAGE_KEY_MAP_STATE = 'xaero_map_state';
-const REGION_SIZE = 512;
-const cpuCores = navigator.hardwareConcurrency || 4;
-const CONCURRENT_LOADS = Math.max(1, cpuCores - 1);
+const STORAGE_KEY_SECTIONS = 'xaero_map_sections';
+const STORAGE_KEY_CONCURRENT = 'xaero_map_concurrent';
+const DEFAULT_CONCURRENT_LOADS = 64;
 
 let API_BASE = `http://${DEFAULT_SERVER}/api`;
 
@@ -28,6 +28,7 @@ class XaeroMapViewer {
   private currentMapType: string | null = null;
   private currentCaveMode: number = 0;
   private currentCaveStart: number = 64;
+  private concurrentLoads: number = DEFAULT_CONCURRENT_LOADS;
   private allRegions: {x: number, z: number}[] = [];
   private allRegionSet: Set<string> = new Set();
   private loadingRegions: Set<string> = new Set();
@@ -37,15 +38,19 @@ class XaeroMapViewer {
   private abortController: AbortController | null = null;
   private savedMapState: MapState | null = null;
   private cacheSizeTimeout: ReturnType<typeof setTimeout> | null = null;
+  private viewportChangeTimeout: ReturnType<typeof setTimeout> | null = null;
+  private lastViewportBounds: ViewportBounds | null = null;
 
   constructor() {
     this.loadServerConfig();
     this.loadMapState();
+    this.loadConcurrentSetting();
     
     const canvas = document.getElementById('mapCanvas') as HTMLCanvasElement;
     this.renderer = new MapRenderer(canvas);
     
     this.renderer.setOnViewportChange((bounds) => this.onViewportChange(bounds));
+    this.renderer.setOnLodChange(() => this.onLodChange());
     
     this.setupUI();
     this.loadCachedDirectory();
@@ -84,6 +89,22 @@ class XaeroMapViewer {
       centerZ: viewState.centerZ
     };
     localStorage.setItem(STORAGE_KEY_MAP_STATE, JSON.stringify(state));
+  }
+  
+  private loadConcurrentSetting(): void {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_CONCURRENT);
+      if (saved) {
+        const value = parseInt(saved, 10);
+        if (!isNaN(value) && value >= 16 && value <= 256) {
+          this.concurrentLoads = value;
+        }
+      }
+    } catch {}
+  }
+  
+  private saveConcurrentSetting(): void {
+    localStorage.setItem(STORAGE_KEY_CONCURRENT, String(this.concurrentLoads));
   }
   
   private updateCurrentServerDisplay(server: string): void {
@@ -172,6 +193,8 @@ class XaeroMapViewer {
       overlay?.classList.remove('open');
     });
     
+    this.setupSectionToggle();
+    
     const yHeightSlider = document.getElementById('yHeightSlider') as HTMLInputElement;
     yHeightSlider?.addEventListener('input', (e) => {
       const value = parseInt((e.target as HTMLInputElement).value);
@@ -213,12 +236,14 @@ class XaeroMapViewer {
     clearCacheBtn?.addEventListener('click', () => this.clearCache());
     
     selectDirBtn?.addEventListener('click', async () => {
-      try {
-        const dirHandle = await (window as unknown as { showDirectoryPicker?: () => Promise<{ name: string }> }).showDirectoryPicker?.();
-        if (dirHandle) {
-          dirInput.value = dirHandle.name;
-        }
-      } catch {
+      if ((window as unknown as { showDirectoryPicker?: () => Promise<{ name: string }> }).showDirectoryPicker) {
+        try {
+          const dirHandle = await (window as unknown as { showDirectoryPicker?: () => Promise<{ name: string }> }).showDirectoryPicker?.();
+          if (dirHandle) {
+            dirInput.value = dirHandle.name;
+          }
+        } catch {}
+      } else {
         const path = prompt('请输入地图目录路径:', dirInput.value || '');
         if (path !== null && path.trim()) {
           dirInput.value = path.trim();
@@ -227,12 +252,14 @@ class XaeroMapViewer {
     });
     
     selectCacheDirBtn?.addEventListener('click', async () => {
-      try {
-        const dirHandle = await (window as unknown as { showDirectoryPicker?: () => Promise<{ name: string }> }).showDirectoryPicker?.();
-        if (dirHandle) {
-          cacheDirInput.value = dirHandle.name;
-        }
-      } catch {
+      if ((window as unknown as { showDirectoryPicker?: () => Promise<{ name: string }> }).showDirectoryPicker) {
+        try {
+          const dirHandle = await (window as unknown as { showDirectoryPicker?: () => Promise<{ name: string }> }).showDirectoryPicker?.();
+          if (dirHandle) {
+            cacheDirInput.value = dirHandle.name;
+          }
+        } catch {}
+      } else {
         const path = prompt('请输入缓存目录路径:', cacheDirInput.value || '');
         if (path !== null && path.trim()) {
           cacheDirInput.value = path.trim();
@@ -240,10 +267,80 @@ class XaeroMapViewer {
       }
     });
     
+    const concurrentSlider = document.getElementById('concurrentSlider') as HTMLInputElement;
+    const concurrentValue = document.getElementById('concurrentValue');
+    if (concurrentSlider && concurrentValue) {
+      concurrentSlider.value = String(this.concurrentLoads);
+      concurrentValue.textContent = String(this.concurrentLoads);
+      
+      concurrentSlider.addEventListener('input', (e) => {
+        const value = parseInt((e.target as HTMLInputElement).value);
+        this.concurrentLoads = value;
+        concurrentValue.textContent = String(value);
+        this.saveConcurrentSetting();
+      });
+    }
+    
     this.loadCacheDirectory();
     this.loadCacheSize();
     
     this.showLoading(false);
+  }
+
+  private setupSectionToggle(): void {
+    const savedSections = this.loadSectionStates();
+    
+    document.querySelectorAll('.section-title[data-toggle]').forEach(title => {
+      const sectionId = title.getAttribute('data-toggle');
+      const section = title.closest('.section') as HTMLElement;
+      const content = section?.querySelector('.section-content') as HTMLElement;
+      
+      if (section && content) {
+        if (savedSections[sectionId!] === false) {
+          section.classList.add('collapsed');
+          content.style.maxHeight = '0';
+        } else {
+          content.style.maxHeight = 'none';
+        }
+        
+        title.addEventListener('click', () => {
+          const isCollapsed = section.classList.toggle('collapsed');
+          if (isCollapsed) {
+            content.style.maxHeight = '0';
+          } else {
+            content.style.maxHeight = 'none';
+          }
+          this.saveSectionStates();
+        });
+      }
+    });
+  }
+  
+  private updateSectionContentHeight(sectionElement: HTMLElement): void {
+    const content = sectionElement.querySelector('.section-content') as HTMLElement;
+    if (content && !sectionElement.classList.contains('collapsed')) {
+      content.style.maxHeight = 'none';
+    }
+  }
+
+  private loadSectionStates(): Record<string, boolean> {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SECTIONS);
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private saveSectionStates(): void {
+    const states: Record<string, boolean> = {};
+    document.querySelectorAll('.section[data-section]').forEach(section => {
+      const sectionId = section.getAttribute('data-section');
+      if (sectionId) {
+        states[sectionId] = !section.classList.contains('collapsed');
+      }
+    });
+    localStorage.setItem(STORAGE_KEY_SECTIONS, JSON.stringify(states));
   }
 
   private updateStatus(message: string): void {
@@ -407,6 +504,7 @@ class XaeroMapViewer {
       }
       
       container.style.display = 'block';
+      this.updateSectionContentHeight(container);
       
       for (const world of worlds) {
         const option = document.createElement('option');
@@ -651,6 +749,8 @@ class XaeroMapViewer {
         this.allRegionSet.add(`${r.x},${r.z}`);
       }
       
+      this.renderer.setAllRegions(this.allRegionSet);
+      
       if (data.mapType) {
         this.currentMapType = data.mapType;
       }
@@ -675,9 +775,51 @@ class XaeroMapViewer {
     }
   }
 
-  private onViewportChange(_bounds: ViewportBounds): void {
+  private onViewportChange(bounds: ViewportBounds): void {
+    const shouldCancelRequest = this.shouldCancelPendingRequests(bounds);
+    
+    if (shouldCancelRequest) {
+      if (this.abortController) {
+        this.abortController.abort();
+      }
+      this.abortController = new AbortController();
+      this.loadingRegions.clear();
+      this.updatePendingRegions();
+    }
+    
+    this.lastViewportBounds = bounds;
+    
+    if (this.viewportChangeTimeout) {
+      clearTimeout(this.viewportChangeTimeout);
+    }
+    
+    this.viewportChangeTimeout = setTimeout(() => {
+      this.loadVisibleRegions();
+      this.saveMapState();
+    }, 50);
+  }
+
+  private shouldCancelPendingRequests(newBounds: ViewportBounds): boolean {
+    if (!this.lastViewportBounds) return false;
+    if (this.loadingRegions.size === 0) return false;
+    
+    const oldBounds = this.lastViewportBounds;
+    const dx = Math.abs(newBounds.startX - oldBounds.startX);
+    const dz = Math.abs(newBounds.startZ - oldBounds.startZ);
+    const threshold = 2;
+    
+    return dx > threshold || dz > threshold;
+  }
+
+  private onLodChange(): void {
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+    this.abortController = new AbortController();
+    
+    this.loadingRegions.clear();
+    this.updatePendingRegions();
     this.loadVisibleRegions();
-    this.saveMapState();
   }
 
   private loadVisibleRegions(): void {
@@ -694,20 +836,20 @@ class XaeroMapViewer {
       }
     }
     
-    const centerRegionX = Math.floor((this.canvasWidth() / 2 - this.rendererOffsetX()) / REGION_SIZE / this.rendererScale());
-    const centerRegionZ = Math.floor((this.canvasHeight() / 2 - this.rendererOffsetZ()) / REGION_SIZE / this.rendererScale());
+    const centerRegionX = Math.floor((bounds.startX + bounds.endX) / 2);
+    const centerRegionZ = Math.floor((bounds.startZ + bounds.endZ) / 2);
     
     const regionsToLoad: {x: number, z: number, dist: number}[] = [];
     
     for (let x = bounds.startX; x <= bounds.endX; x++) {
       for (let z = bounds.startZ; z <= bounds.endZ; z++) {
         const key = `${x},${z}`;
-        if (!this.renderer.hasRegion(x, z) && !this.loadingRegions.has(key)) {
-          if (this.allRegionSet.size === 0 || this.allRegionSet.has(key)) {
-            const dist = Math.abs(x - centerRegionX) + Math.abs(z - centerRegionZ);
-            regionsToLoad.push({x, z, dist});
-          }
-        }
+        if (this.renderer.hasRegion(x, z)) continue;
+        if (this.loadingRegions.has(key)) continue;
+        if (this.allRegionSet.size > 0 && !this.allRegionSet.has(key)) continue;
+        
+        const dist = Math.abs(x - centerRegionX) + Math.abs(z - centerRegionZ);
+        regionsToLoad.push({x, z, dist});
       }
     }
     
@@ -715,31 +857,13 @@ class XaeroMapViewer {
     
     regionsToLoad.sort((a, b) => a.dist - b.dist);
     
-    const toLoad = regionsToLoad.slice(0, CONCURRENT_LOADS * 3);
+    const toLoad = regionsToLoad.slice(0, this.concurrentLoads);
     
     this.loadRegionsBatch(toLoad.map(r => ({x: r.x, z: r.z})));
   }
 
-  private canvasWidth(): number {
-    const canvas = document.getElementById('mapCanvas') as HTMLCanvasElement;
-    return canvas?.width || 0;
-  }
-
-  private canvasHeight(): number {
-    const canvas = document.getElementById('mapCanvas') as HTMLCanvasElement;
-    return canvas?.height || 0;
-  }
-
-  private rendererOffsetX(): number {
-    return 0;
-  }
-
-  private rendererOffsetZ(): number {
-    return 0;
-  }
-
-  private rendererScale(): number {
-    return 1;
+  private updatePendingRegions(): void {
+    this.renderer.setPendingRegions(new Set(this.loadingRegions));
   }
 
   private async loadRegionsBatch(regions: {x: number, z: number}[]): Promise<void> {
@@ -753,11 +877,13 @@ class XaeroMapViewer {
       const key = `${x},${z}`;
       if (this.loadingRegions.has(key)) return;
       this.loadingRegions.add(key);
+      this.updatePendingRegions();
       
       try {
         await this.loadSingleRegionPixels(x, z, signal);
       } finally {
         this.loadingRegions.delete(key);
+        this.updatePendingRegions();
       }
       return;
     }
@@ -768,10 +894,13 @@ class XaeroMapViewer {
     for (const r of toLoad) {
       this.loadingRegions.add(`${r.x},${r.z}`);
     }
+    this.updatePendingRegions();
     
     try {
       const coordsStr = toLoad.map(r => `${r.x},${r.z}`).join(';');
-      let url = `${API_BASE}/batch-regions?world=${encodeURIComponent(this.currentWorld!)}&dim=${encodeURIComponent(this.currentDim!)}&coords=${encodeURIComponent(coordsStr)}`;
+      const currentLod = this.renderer.getCurrentLodLevel();
+      const bounds = this.renderer.getViewportBounds();
+      let url = `${API_BASE}/batch-regions?world=${encodeURIComponent(this.currentWorld!)}&dim=${encodeURIComponent(this.currentDim!)}&coords=${encodeURIComponent(coordsStr)}&lod=${currentLod}&viewStartX=${bounds.startX}&viewStartZ=${bounds.startZ}&viewEndX=${bounds.endX}&viewEndZ=${bounds.endZ}`;
       if (this.currentMapType) {
         url += `&mapType=${encodeURIComponent(this.currentMapType)}`;
       }
@@ -794,24 +923,23 @@ class XaeroMapViewer {
       const view = new DataView(buffer);
       
       const totalRegions = view.getUint32(0, true);
-      let offset = 4;
-      
-      const REGION_PIXEL_SIZE = REGION_SIZE * REGION_SIZE * 4;
+      const lodValue = view.getUint32(4, true);
+      let offset = 8;
       
       for (let i = 0; i < totalRegions; i++) {
         const rx = view.getInt32(offset, true);
         const rz = view.getInt32(offset + 4, true);
-        const exists = view.getUint32(offset + 8, true);
+        const pixelSize = view.getUint32(offset + 8, true);
         offset += 12;
         
-        if (exists) {
-          const pixelData = new Uint8Array(buffer, offset, REGION_PIXEL_SIZE);
-          this.renderer.addRegionPixels(rx, rz, pixelData);
+        if (pixelSize > 0) {
+          const pixelData = new Uint8Array(buffer, offset, pixelSize);
+          this.renderer.addRegionPixels(rx, rz, pixelData, lodValue);
           const key = `${rx},${rz}`;
           this.regionAccessTime.set(key, Date.now());
         }
         
-        offset += REGION_PIXEL_SIZE;
+        offset += pixelSize;
       }
       
       this.renderer.render();
@@ -826,12 +954,14 @@ class XaeroMapViewer {
       for (const r of toLoad) {
         this.loadingRegions.delete(`${r.x},${r.z}`);
       }
+      this.updatePendingRegions();
     }
   }
 
   private async loadSingleRegionPixels(x: number, z: number, signal?: AbortSignal): Promise<void> {
     try {
-      let url = `${API_BASE}/region-pixels?world=${encodeURIComponent(this.currentWorld!)}&dim=${encodeURIComponent(this.currentDim!)}&x=${x}&z=${z}`;
+      const currentLod = this.renderer.getCurrentLodLevel();
+      let url = `${API_BASE}/region-pixels?world=${encodeURIComponent(this.currentWorld!)}&dim=${encodeURIComponent(this.currentDim!)}&x=${x}&z=${z}&lod=${currentLod}`;
       if (this.currentMapType) {
         url += `&mapType=${encodeURIComponent(this.currentMapType)}`;
       }
@@ -845,7 +975,7 @@ class XaeroMapViewer {
       const response = await fetch(url, { signal });
       if (response.ok) {
         const pixelData = new Uint8Array(await response.arrayBuffer());
-        this.renderer.addRegionPixels(x, z, pixelData);
+        this.renderer.addRegionPixels(x, z, pixelData, currentLod);
         this.regionAccessTime.set(`${x},${z}`, Date.now());
         this.renderer.render();
         this.updateStats();
@@ -888,7 +1018,7 @@ class XaeroMapViewer {
         <div>已加载区域: ${regionCount} / ${this.allRegions.length}</div>
         <div>纹理图集: ${atlasCount}</div>
         <div>LOD: ${lodLevel}</div>
-        <div>并发加载: ${CONCURRENT_LOADS} (核心: ${cpuCores})</div>
+        <div>并发加载: ${this.concurrentLoads}</div>
       `;
     }
   }

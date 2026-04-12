@@ -5,13 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:server": "node --max-old-space-size=4096 server/index.js",
+    "dev:server": "node server/start.js",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "start": "node --max-old-space-size=4096 server/index.js"
+    "start": "node server/start.js"
   },
   "dependencies": {
+    "better-sqlite3": "^12.9.0",
     "canvas": "^3.2.3",
     "compression": "^1.8.1",
     "cors": "^2.8.5",

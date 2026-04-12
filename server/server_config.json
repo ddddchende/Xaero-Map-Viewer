@@ -1,0 +1,7 @@
+{
+  "port": 3001,
+  "maxMemoryMB": 4096,
+  "maxCacheEntries": 256,
+  "maxConcurrentLoads": 256,
+  "maxBatchRegions": 256
+}

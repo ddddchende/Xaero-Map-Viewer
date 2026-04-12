@@ -85,8 +85,12 @@ export class MapRenderer {
   
   private currentDim: string | null = null;
   
-  private onViewportChange: ((bounds: ViewportBounds) => void) | null = null;
+  private onViewportChangeCallback: ((bounds: ViewportBounds) => void) | null = null;
+  private onLodChangeCallback: (() => void) | null = null;
   private loadedRegionKeys: Set<string> = new Set();
+  private pendingRegionKeys: Set<string> = new Set();
+  private allRegionKeys: Set<string> = new Set();
+  private regionLodLevels: Map<string, number> = new Map();
   
   private renderQueued: boolean = false;
   private currentLodLevel: number = 0;
@@ -178,7 +182,11 @@ export class MapRenderer {
   }
 
   setOnViewportChange(callback: (bounds: ViewportBounds) => void): void {
-    this.onViewportChange = callback;
+    this.onViewportChangeCallback = callback;
+  }
+
+  setOnLodChange(callback: () => void): void {
+    this.onLodChangeCallback = callback;
   }
 
   setCurrentDimension(dim: string | null): void {
@@ -373,9 +381,9 @@ export class MapRenderer {
   }
 
   private notifyViewportChange(): void {
-    if (this.onViewportChange) {
+    if (this.onViewportChangeCallback) {
       const bounds = this.getViewportBounds();
-      this.onViewportChange(bounds);
+      this.onViewportChangeCallback(bounds);
     }
   }
 
@@ -510,7 +518,38 @@ export class MapRenderer {
     
     if (newLodLevel !== this.currentLodLevel) {
       this.currentLodLevel = newLodLevel;
+      if (this.onLodChangeCallback) {
+        this.onLodChangeCallback();
+      }
     }
+  }
+
+  clearAllRegions(): void {
+    for (const atlas of this.atlases) {
+      atlas.freeSlots = Array.from({ length: 64 }, (_, i) => i);
+    }
+    this.regionSlots.clear();
+    this.loadedRegionKeys.clear();
+    this.pendingRegionKeys.clear();
+    this.allRegionKeys.clear();
+    this.regionLodLevels.clear();
+    this.slotLastAccess.clear();
+  }
+
+  setPendingRegions(regions: Set<string>): void {
+    this.pendingRegionKeys = regions;
+  }
+
+  setAllRegions(regions: Set<string>): void {
+    this.allRegionKeys = regions;
+  }
+
+  getLoadingStats(): { loaded: number; pending: number; total: number } {
+    return {
+      loaded: this.loadedRegionKeys.size,
+      pending: this.pendingRegionKeys.size,
+      total: this.allRegionKeys.size
+    };
   }
 
   addRegion(region: MapRegion): void {
@@ -533,7 +572,7 @@ export class MapRenderer {
     this.slotLastAccess.set(key, Date.now());
   }
 
-  addRegionPixels(regionX: number, regionZ: number, pixelData: Uint8Array): void {
+  addRegionPixels(regionX: number, regionZ: number, pixelData: Uint8Array, lod: number = 0): void {
     const key = `${regionX},${regionZ}`;
     
     const oldSlot = this.regionSlots.get(key);
@@ -545,10 +584,37 @@ export class MapRenderer {
     const slot = this.allocateSlot(key);
     if (!slot) return;
     
-    this.uploadToAtlas(slot, pixelData);
+    let finalPixelData = pixelData;
+    if (lod > 0) {
+      finalPixelData = this.upsamplePixels(pixelData, 512 >> lod, 512);
+    }
+    
+    this.uploadToAtlas(slot, finalPixelData);
     
     this.loadedRegionKeys.add(key);
+    this.regionLodLevels.set(key, lod);
     this.slotLastAccess.set(key, Date.now());
+  }
+
+  private upsamplePixels(pixels: Uint8Array, srcSize: number, dstSize: number): Uint8Array {
+    const result = new Uint8Array(dstSize * dstSize * 4);
+    const ratio = srcSize / dstSize;
+    
+    for (let dy = 0; dy < dstSize; dy++) {
+      for (let dx = 0; dx < dstSize; dx++) {
+        const sx = Math.floor(dx * ratio);
+        const sy = Math.floor(dy * ratio);
+        const srcIdx = (sy * srcSize + sx) * 4;
+        const dstIdx = (dy * dstSize + dx) * 4;
+        
+        result[dstIdx] = pixels[srcIdx];
+        result[dstIdx + 1] = pixels[srcIdx + 1];
+        result[dstIdx + 2] = pixels[srcIdx + 2];
+        result[dstIdx + 3] = pixels[srcIdx + 3];
+      }
+    }
+    
+    return result;
   }
 
   private allocateSlot(key: string): SlotAllocation | null {
@@ -643,7 +709,11 @@ export class MapRenderer {
   }
 
   hasRegion(x: number, z: number): boolean {
-    return this.loadedRegionKeys.has(`${x},${z}`);
+    const key = `${x},${z}`;
+    if (!this.loadedRegionKeys.has(key)) return false;
+    const loadedLod = this.regionLodLevels.get(key);
+    if (loadedLod === undefined) return false;
+    return loadedLod <= this.currentLodLevel;
   }
 
   removeRegion(x: number, z: number): void {
@@ -655,6 +725,7 @@ export class MapRenderer {
     }
     this.slotLastAccess.delete(key);
     this.loadedRegionKeys.delete(key);
+    this.regionLodLevels.delete(key);
   }
 
   clearRegions(): void {
@@ -664,6 +735,9 @@ export class MapRenderer {
     this.regionSlots.clear();
     this.slotLastAccess.clear();
     this.loadedRegionKeys.clear();
+    this.pendingRegionKeys.clear();
+    this.allRegionKeys.clear();
+    this.regionLodLevels.clear();
   }
 
   private scheduleRender(): void {
@@ -712,6 +786,8 @@ export class MapRenderer {
     ctx.setTransform(this.devicePixelRatio, 0, 0, this.devicePixelRatio, 0, 0);
     ctx.clearRect(0, 0, w, h);
     
+    this.renderPendingPlaceholders(ctx, w, h);
+    
     if (this.mouseWorldX !== null && this.mouseWorldZ !== null) {
       const isNether = this.isNetherDimension();
       
@@ -753,6 +829,59 @@ export class MapRenderer {
       ctx.fillStyle = '#FFFFFF';
       ctx.fillText(text, x, y);
     }
+    
+    this.renderLoadingProgress(ctx, w, h);
+  }
+  
+  private renderPendingPlaceholders(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    if (this.pendingRegionKeys.size === 0) return;
+    
+    const bounds = this.getViewportBounds();
+    
+    for (let rx = bounds.startX; rx <= bounds.endX; rx++) {
+      for (let rz = bounds.startZ; rz <= bounds.endZ; rz++) {
+        const key = `${rx},${rz}`;
+        if (!this.pendingRegionKeys.has(key)) continue;
+        if (this.loadedRegionKeys.has(key)) continue;
+        
+        const screenX = rx * REGION_SIZE * this.scale + this.offsetX;
+        const screenZ = rz * REGION_SIZE * this.scale + this.offsetZ;
+        const size = REGION_SIZE * this.scale;
+        
+        if (screenX + size < 0 || screenX > w || screenZ + size < 0 || screenZ > h) continue;
+        
+        ctx.fillStyle = 'rgba(141, 85, 85, 0.35)';
+        ctx.fillRect(screenX, screenZ, size, size);
+        
+        ctx.strokeStyle = 'rgba(145, 145, 145, 0.25)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(screenX + 0.5, screenZ + 0.5, size - 1, size - 1);
+      }
+    }
+  }
+  
+  private renderLoadingProgress(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const stats = this.getLoadingStats();
+    if (stats.pending === 0) return;
+    
+    const text = `请求中: ${stats.pending} 个区域`;
+    
+    ctx.font = '14px "Minecraft", "Courier New", monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'bottom';
+    
+    const textWidth = ctx.measureText(text).width;
+    const padding = 8;
+    const boxWidth = textWidth + padding * 2;
+    const boxHeight = 24;
+    const x = w - 10;
+    const y = h - 10;
+    
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(x - boxWidth, y - boxHeight, boxWidth, boxHeight);
+    
+    ctx.fillStyle = '#AAAAAA';
+    ctx.fillText(text, x - padding, y - padding);
   }
 
   private renderBatched(): void {
@@ -883,6 +1012,10 @@ export class MapRenderer {
     }
     
     return { color, alpha };
+  }
+
+  getCurrentLodLevel(): number {
+    return this.currentLodLevel;
   }
 
   getStats(): { regionCount: number; atlasCount: number; lodLevel: number } {

@@ -6,7 +6,7 @@
   <title>Xaero Map Viewer - Minecraft Style</title>
   <link rel="stylesheet" href="/styles/main.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%238B5A2B' x='10' y='10' width='80' height='80'/><rect fill='%2371A033' x='10' y='10' width='80' height='20'/><rect fill='%236B4423' x='10' y='70' width='80' height='20'/></svg>">
-  <script type="module" crossorigin src="/assets/index-CDS-QOV1.js"></script>
+  <script type="module" crossorigin src="/assets/index-CEco-3sq.js"></script>
 </head>
 <body>
   <button id="toggleSidebar">☰</button>
@@ -17,92 +17,119 @@
       <h2>Xaero Map Viewer</h2>
       <div id="status" class="status">正在连接服务器...</div>
       
-      <div class="section">
-        <div class="section-title">连接设置</div>
-        <div class="control-group">
-          <label>服务端地址</label>
-          <div class="input-row">
-            <input type="text" id="serverInput" placeholder="例如: localhost:3001">
-            <button id="setServerBtn">连接</button>
-          </div>
-          <div class="hint" id="currentServer">当前: localhost:3001</div>
+      <div class="section" data-section="connection">
+        <div class="section-title" data-toggle="connection">
+          <span class="toggle-icon">▼</span>
+          <span>连接设置</span>
         </div>
-      </div>
-      
-      <div class="section">
-        <div class="section-title">目录设置</div>
-        <div class="control-group">
-          <label>地图目录</label>
-          <div class="input-row">
-            <input type="text" id="dirInput" placeholder="输入地图目录路径">
-            <button id="selectDirBtn" class="btn-select">选择</button>
-          </div>
-          <button id="setDirBtn" class="btn-confirm">确认更改目录</button>
-        </div>
-        <div class="control-group">
-          <label>缓存目录</label>
-          <div class="input-row">
-            <input type="text" id="cacheDirInput" placeholder="默认: server/cache">
-            <button id="selectCacheDirBtn" class="btn-select">选择</button>
-          </div>
-          <button id="setCacheDirBtn" class="btn-confirm">确认更改目录</button>
-          <div class="cache-info">
-            <span id="cacheSize">计算中...</span>
-            <button id="clearCacheBtn">清除缓存</button>
+        <div class="section-content">
+          <div class="control-group">
+            <label>服务端地址</label>
+            <div class="input-row">
+              <input type="text" id="serverInput" placeholder="例如: localhost:3001">
+              <button id="setServerBtn">连接</button>
+            </div>
+            <div class="hint" id="currentServer">当前: localhost:3001</div>
           </div>
         </div>
       </div>
       
-      <div class="section" id="worldSection" style="display:none;">
-        <div class="section-title">世界选择</div>
-        <div class="control-group">
-          <label>世界</label>
-          <select id="worldSelector"></select>
+      <div class="section" data-section="directory">
+        <div class="section-title" data-toggle="directory">
+          <span class="toggle-icon">▼</span>
+          <span>目录设置</span>
         </div>
-        <div class="control-group">
-          <label>维度</label>
-          <select id="dimSelector"></select>
-        </div>
-        <div class="control-group">
-          <label>地图类型</label>
-          <select id="mapTypeSelector"></select>
-        </div>
-        <div class="control-group" id="caveModeGroup" style="display:none;">
-          <label>洞穴模式</label>
-          <select id="caveModeSelector">
-            <option value="0">关闭</option>
-            <option value="1">分层</option>
-            <option value="2">完整</option>
-          </select>
-        </div>
-        <div class="control-group" id="caveStartGroup" style="display:none;">
-          <div class="inline-label">
-            <label>洞穴Y高度</label>
-            <span id="caveStartValue" class="value">64</span>
+        <div class="section-content">
+          <div class="control-group">
+            <label>地图目录</label>
+            <div class="input-row">
+              <input type="text" id="dirInput" placeholder="输入地图目录路径">
+              <button id="selectDirBtn" class="btn-select">选择</button>
+            </div>
+            <button id="setDirBtn" class="btn-confirm">确认更改目录</button>
           </div>
-          <input type="range" id="caveStartSlider" min="-64" max="320" value="64" step="1">
+          <div class="control-group">
+            <label>缓存目录</label>
+            <div class="input-row">
+              <input type="text" id="cacheDirInput" placeholder="默认: server/cache">
+              <button id="selectCacheDirBtn" class="btn-select">选择</button>
+            </div>
+            <button id="setCacheDirBtn" class="btn-confirm">确认更改目录</button>
+            <div class="cache-info">
+              <span id="cacheSize">计算中...</span>
+              <button id="clearCacheBtn">清除缓存</button>
+            </div>
+          </div>
         </div>
       </div>
       
-      <div class="section">
-        <div class="section-title">视图控制</div>
-        <div class="control-group inline">
-          <label>坐标</label>
-          <span id="coords" class="value">-</span>
+      <div class="section" data-section="world" id="worldSection" style="display:none;">
+        <div class="section-title" data-toggle="world">
+          <span class="toggle-icon">▼</span>
+          <span>世界选择</span>
         </div>
-        <div class="control-group">
-          <div class="inline-label">
-            <label>缩放</label>
-            <span id="zoomLevel" class="value">1x</span>
+        <div class="section-content">
+          <div class="control-group">
+            <label>世界</label>
+            <select id="worldSelector"></select>
           </div>
-          <input type="range" id="zoomSlider" min="-8" max="4" value="0" step="0.5">
+          <div class="control-group">
+            <label>维度</label>
+            <select id="dimSelector"></select>
+          </div>
+          <div class="control-group">
+            <label>地图类型</label>
+            <select id="mapTypeSelector"></select>
+          </div>
+          <div class="control-group" id="caveModeGroup" style="display:none;">
+            <label>洞穴模式</label>
+            <select id="caveModeSelector">
+              <option value="0">关闭</option>
+              <option value="1">分层</option>
+              <option value="2">完整</option>
+            </select>
+          </div>
+          <div class="control-group" id="caveStartGroup" style="display:none;">
+            <div class="inline-label">
+              <label>洞穴Y高度</label>
+              <span id="caveStartValue" class="value">64</span>
+            </div>
+            <input type="range" id="caveStartSlider" min="-64" max="320" value="64" step="1">
+          </div>
         </div>
-        <div class="control-group">
-          <label>跳转坐标</label>
-          <div class="coord-inputs">
-            <input type="text" id="targetX" placeholder="X" value="0">
-            <input type="text" id="targetZ" placeholder="Z" value="0">
-            <button id="gotoCoords">跳转</button>
+      </div>
+      
+      <div class="section" data-section="view">
+        <div class="section-title" data-toggle="view">
+          <span class="toggle-icon">▼</span>
+          <span>视图控制</span>
+        </div>
+        <div class="section-content">
+          <div class="control-group inline">
+            <label>坐标</label>
+            <span id="coords" class="value">-</span>
+          </div>
+          <div class="control-group">
+            <div class="inline-label">
+              <label>缩放</label>
+              <span id="zoomLevel" class="value">1x</span>
+            </div>
+            <input type="range" id="zoomSlider" min="-8" max="4" value="0" step="0.5">
+          </div>
+          <div class="control-group">
+            <label>跳转坐标</label>
+            <div class="coord-inputs">
+              <input type="text" id="targetX" placeholder="X" value="0">
+              <input type="text" id="targetZ" placeholder="Z" value="0">
+              <button id="gotoCoords">跳转</button>
+            </div>
+          </div>
+          <div class="control-group">
+            <div class="inline-label">
+              <label>并发加载</label>
+              <span id="concurrentValue" class="value">64</span>
+            </div>
+            <input type="range" id="concurrentSlider" min="16" max="256" value="64" step="1">
           </div>
         </div>
       </div>

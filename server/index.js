@@ -1,61 +1,108 @@
 import express from 'express';
 import cors from 'cors';
 import compression from 'compression';
-import { readdir, readFile, writeFile, mkdir, unlink } from 'fs/promises';
+import { readdir, readFile, mkdir } from 'fs/promises';
 import { existsSync, writeFileSync, readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import JSZip from 'jszip';
 import { cpus } from 'os';
 import { Worker } from 'worker_threads';
+import Database from 'better-sqlite3';
+import zlib from 'zlib';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(compression({ level: 1, threshold: 1024 }));
+app.use(compression({ level: 9, threshold: 1024 }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../dist')));
 
 let mapDirectory = '';
 let cacheDirectory = path.join(__dirname, 'cache');
+let db = null;
 
-const CONFIG_FILE = path.join(__dirname, 'config.json');
+const USER_CONFIG_FILE = path.join(__dirname, 'config.json');
+const SERVER_CONFIG_FILE = path.join(__dirname, 'server_config.json');
 
-function loadConfig() {
+let maxMemoryCacheEntries = 64;
+let maxConcurrentLoads = 32;
+let maxBatchRegions = 64;
+
+function loadUserConfig() {
   try {
-    if (existsSync(CONFIG_FILE)) {
-      const config = JSON.parse(readFileSync(CONFIG_FILE, 'utf-8'));
+    if (existsSync(USER_CONFIG_FILE)) {
+      const config = JSON.parse(readFileSync(USER_CONFIG_FILE, 'utf-8'));
       if (config.cacheDirectory) {
         cacheDirectory = config.cacheDirectory;
       }
       if (config.mapDirectory) {
         mapDirectory = config.mapDirectory;
       }
+    } else {
+      saveUserConfig();
     }
   } catch (e) {
-    console.log('Failed to load config:', e.message);
+    console.log('Failed to load user config:', e.message);
+    saveUserConfig();
   }
 }
 
-function saveConfig() {
+function saveUserConfig() {
   try {
-    writeFileSync(CONFIG_FILE, JSON.stringify({
+    writeFileSync(USER_CONFIG_FILE, JSON.stringify({
       cacheDirectory,
       mapDirectory
     }, null, 2));
   } catch (e) {
-    console.log('Failed to save config:', e.message);
+    console.log('Failed to save user config:', e.message);
   }
 }
 
-loadConfig();
+function loadServerConfig() {
+  try {
+    if (existsSync(SERVER_CONFIG_FILE)) {
+      const config = JSON.parse(readFileSync(SERVER_CONFIG_FILE, 'utf-8'));
+      if (config.maxCacheEntries) {
+        maxMemoryCacheEntries = config.maxCacheEntries;
+      }
+      if (config.maxConcurrentLoads) {
+        maxConcurrentLoads = config.maxConcurrentLoads;
+      }
+      if (config.maxBatchRegions) {
+        maxBatchRegions = config.maxBatchRegions;
+      }
+    } else {
+      saveServerConfig();
+    }
+  } catch (e) {
+    console.log('Failed to load server config:', e.message);
+    saveServerConfig();
+  }
+}
 
-const MAX_MEMORY_CACHE_ENTRIES = 20;
-const MAX_CONCURRENT_LOADS = 4;
+function saveServerConfig() {
+  try {
+    writeFileSync(SERVER_CONFIG_FILE, JSON.stringify({
+      maxCacheEntries: maxMemoryCacheEntries,
+      maxConcurrentLoads,
+      maxBatchRegions
+    }, null, 2));
+  } catch (e) {
+    console.log('Failed to save server config:', e.message);
+  }
+}
+
+loadUserConfig();
+loadServerConfig();
+
+const MAX_MEMORY_CACHE_ENTRIES = maxMemoryCacheEntries;
+const MAX_CONCURRENT_LOADS = maxConcurrentLoads;
+const MAX_BATCH_REGIONS = maxBatchRegions;
 const pixelCache = new Map();
 const pixelCacheOrder = [];
 
@@ -63,6 +110,9 @@ function pruneMemoryCache() {
   while (pixelCacheOrder.length > MAX_MEMORY_CACHE_ENTRIES) {
     const oldestKey = pixelCacheOrder.shift();
     pixelCache.delete(oldestKey);
+  }
+  if (global.gc && pixelCacheOrder.length > MAX_MEMORY_CACHE_ENTRIES / 2) {
+    global.gc();
   }
 }
 
@@ -80,19 +130,47 @@ async function ensureCacheDir() {
   }
 }
 
-function getCacheKey(dimPath, regionX, regionZ, yHeight = null) {
+function initDatabase() {
+  const dbPath = path.join(cacheDirectory, 'cache.db');
+  db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = OFF');
+  db.pragma('cache_size = -128000');
+  db.pragma('temp_store = MEMORY');
+  db.pragma('mmap_size = 268435456');
+  
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS region_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cache_key TEXT UNIQUE NOT NULL,
+      data BLOB NOT NULL,
+      compressed INTEGER DEFAULT 1,
+      created_at INTEGER DEFAULT (strftime('%s', 'now')),
+      accessed_at INTEGER DEFAULT (strftime('%s', 'now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_cache_key ON region_cache(cache_key);
+  `);
+  
+  console.log(`Database initialized: ${dbPath}`);
+}
+
+function compressData(data) {
+  return zlib.gzipSync(data, { level: 1 });
+}
+
+function decompressData(data) {
+  return zlib.gunzipSync(data);
+}
+
+function getCacheKey(dimPath, regionX, regionZ, yHeight = null, lod = 0) {
   const relativePath = path.relative(mapDirectory, dimPath);
   const heightSuffix = yHeight !== null ? `_y${yHeight}` : '';
-  return `${relativePath}/${regionX}_${regionZ}${heightSuffix}`;
+  const lodSuffix = lod > 0 ? `_lod${lod}` : '';
+  return `${relativePath}/${regionX}_${regionZ}${heightSuffix}${lodSuffix}`;
 }
 
-function getCacheFilePath(cacheKey) {
-  const safeKey = cacheKey.replace(/[\\/:*?"<>|]/g, '_');
-  return path.join(cacheDirectory, `${safeKey}.bin`);
-}
-
-async function readPixelCache(dimPath, regionX, regionZ, yHeight = null) {
-  const key = getCacheKey(dimPath, regionX, regionZ, yHeight);
+async function readPixelCache(dimPath, regionX, regionZ, yHeight = null, lod = 0) {
+  const key = getCacheKey(dimPath, regionX, regionZ, yHeight, lod);
   
   if (pixelCache.has(key)) {
     const idx = pixelCacheOrder.indexOf(key);
@@ -103,48 +181,85 @@ async function readPixelCache(dimPath, regionX, regionZ, yHeight = null) {
     return pixelCache.get(key);
   }
   
-  const filePath = getCacheFilePath(key);
-  if (existsSync(filePath)) {
+  if (db) {
     try {
-      const data = await readFile(filePath);
-      pixelCache.set(key, data);
-      pixelCacheOrder.push(key);
-      pruneMemoryCache();
-      return data;
-    } catch {
-      return null;
+      const row = db.prepare('SELECT data, compressed FROM region_cache WHERE cache_key = ?').get(key);
+      if (row) {
+        const data = row.compressed ? decompressData(row.data) : row.data;
+        pixelCache.set(key, data);
+        pixelCacheOrder.push(key);
+        pruneMemoryCache();
+        
+        return data;
+      }
+    } catch (e) {
+      console.error('Database read error:', e.message);
     }
   }
   
   return null;
 }
 
-async function writePixelCache(dimPath, regionX, regionZ, pixels, yHeight = null) {
-  const key = getCacheKey(dimPath, regionX, regionZ, yHeight);
+async function writePixelCache(dimPath, regionX, regionZ, pixels, yHeight = null, lod = 0) {
+  const key = getCacheKey(dimPath, regionX, regionZ, yHeight, lod);
   pixelCache.set(key, pixels);
   pixelCacheOrder.push(key);
   pruneMemoryCache();
   
-  const filePath = getCacheFilePath(key);
-  try {
-    await writeFile(filePath, pixels);
-  } catch {}
+  if (db) {
+    try {
+      const compressed = compressData(pixels);
+      const insertStmt = db.prepare('INSERT OR REPLACE INTO region_cache (cache_key, data, compressed) VALUES (?, ?, 1)');
+      insertStmt.run(key, compressed);
+    } catch (e) {
+      console.error('Database write error:', e.message);
+    }
+  }
 }
 
-async function loadRegionPixels(dimPath, regionX, regionZ, caveMode = null, caveStart = null) {
+function downsamplePixels(pixels, srcSize, dstSize) {
+  const result = Buffer.alloc(dstSize * dstSize * 4);
+  const ratio = srcSize / dstSize;
+  
+  for (let dy = 0; dy < dstSize; dy++) {
+    for (let dx = 0; dx < dstSize; dx++) {
+      const sx = Math.floor(dx * ratio);
+      const sy = Math.floor(dy * ratio);
+      const srcIdx = (sy * srcSize + sx) * 4;
+      const dstIdx = (dy * dstSize + dx) * 4;
+      
+      result[dstIdx] = pixels[srcIdx];
+      result[dstIdx + 1] = pixels[srcIdx + 1];
+      result[dstIdx + 2] = pixels[srcIdx + 2];
+      result[dstIdx + 3] = pixels[srcIdx + 3];
+    }
+  }
+  
+  return result;
+}
+
+async function loadRegionPixels(dimPath, regionX, regionZ, caveMode = null, caveStart = null, lod = 0) {
   const cacheKey = caveMode !== null ? `cave_${caveMode}_${caveStart || 'auto'}` : null;
-  const cached = await readPixelCache(dimPath, regionX, regionZ, cacheKey);
+  
+  const cached = await readPixelCache(dimPath, regionX, regionZ, cacheKey, lod);
   if (cached) return cached;
   
+  if (lod > 0) {
+    const fullResCached = await readPixelCache(dimPath, regionX, regionZ, cacheKey, 0);
+    if (fullResCached) {
+      const lodSize = 512 >> lod;
+      const downsampled = downsamplePixels(fullResCached, 512, lodSize);
+      await writePixelCache(dimPath, regionX, regionZ, downsampled, cacheKey, lod);
+      return downsampled;
+    }
+  }
+  
+  let pixels;
   if (caveMode === 0 || caveMode === null) {
     const regionData = await loadRegion(dimPath, regionX, regionZ);
     if (!regionData) return null;
-    const pixels = renderRegionToPixels(regionData);
-    await writePixelCache(dimPath, regionX, regionZ, pixels, cacheKey);
-    return pixels;
-  }
-  
-  if (caveMode === 1) {
+    pixels = renderRegionToPixels(regionData);
+  } else if (caveMode === 1) {
     const maxLayer = caveStart !== null ? Math.floor(caveStart / 16) : 7;
     const layers = [];
     
@@ -161,17 +276,11 @@ async function loadRegionPixels(dimPath, regionX, regionZ, caveMode = null, cave
     if (layers.length === 0) {
       const regionData = await loadRegion(dimPath, regionX, regionZ);
       if (!regionData) return null;
-      const pixels = renderRegionToPixels(regionData);
-      await writePixelCache(dimPath, regionX, regionZ, pixels, cacheKey);
-      return pixels;
+      pixels = renderRegionToPixels(regionData);
+    } else {
+      pixels = renderCaveLayersToPixels(layers);
     }
-    
-    const pixels = renderCaveLayersToPixels(layers);
-    await writePixelCache(dimPath, regionX, regionZ, pixels, cacheKey);
-    return pixels;
-  }
-  
-  if (caveMode === 2) {
+  } else if (caveMode === 2) {
     const layers = [];
     const maxLayer = 15;
     
@@ -188,20 +297,25 @@ async function loadRegionPixels(dimPath, regionX, regionZ, caveMode = null, cave
     if (layers.length === 0) {
       const regionData = await loadRegion(dimPath, regionX, regionZ);
       if (!regionData) return null;
-      const pixels = renderRegionToPixels(regionData);
-      await writePixelCache(dimPath, regionX, regionZ, pixels, cacheKey);
-      return pixels;
+      pixels = renderRegionToPixels(regionData);
+    } else {
+      pixels = renderCaveLayersToPixels(layers);
     }
-    
-    const pixels = renderCaveLayersToPixels(layers);
-    await writePixelCache(dimPath, regionX, regionZ, pixels, cacheKey);
-    return pixels;
+  } else {
+    const regionData = await loadRegion(dimPath, regionX, regionZ);
+    if (!regionData) return null;
+    pixels = renderRegionToPixels(regionData);
   }
   
-  const regionData = await loadRegion(dimPath, regionX, regionZ);
-  if (!regionData) return null;
-  const pixels = renderRegionToPixels(regionData);
-  await writePixelCache(dimPath, regionX, regionZ, pixels, cacheKey);
+  await writePixelCache(dimPath, regionX, regionZ, pixels, cacheKey, 0);
+  
+  if (lod > 0) {
+    const lodSize = 512 >> lod;
+    const downsampled = downsamplePixels(pixels, 512, lodSize);
+    await writePixelCache(dimPath, regionX, regionZ, downsampled, cacheKey, lod);
+    return downsampled;
+  }
+  
   return pixels;
 }
 
@@ -684,51 +798,34 @@ const BIOME_COLORS = {
 
 const DEFAULT_BIOME = { grass: 0x91bd59, foliage: 0x77ab2f, water: 0x3f76e4 };
 
-function getBiomeColor(biomeName) {
-  if (!biomeName) return DEFAULT_BIOME;
-  const normalizedName = biomeName.startsWith('minecraft:') ? biomeName : `minecraft:${biomeName}`;
-  return BIOME_COLORS[normalizedName] || DEFAULT_BIOME;
-}
-
-const unknownBlocksLogged = new Set();
-
 function computeBlockColor(state, biome, hasWaterOverlay) {
   if (!state || state === 'minecraft:air') {
     if (hasWaterOverlay) {
-      const waterColor = getBiomeColor(biome).water;
-      return { color: waterColor, alpha: 191 };
+      const biomeColor = BIOME_COLORS[biome] || DEFAULT_BIOME;
+      return { color: biomeColor.water, alpha: 191 };
     }
     return { color: 0, alpha: 0 };
   }
   
   const info = BLOCK_COLORS[state];
   if (!info) {
-    if (unknownBlocksLogged.size < 20 && !unknownBlocksLogged.has(state)) {
-      unknownBlocksLogged.add(state);
-      console.log(`Unknown block: ${state}`);
-    }
     return { color: 0x808080, alpha: 255 };
   }
   
   let color = info.color;
-  let alpha = info.alpha !== undefined ? info.alpha : 255;
+  let alpha = info.alpha ?? 255;
   
-  if (info.grass) {
-    color = getBiomeColor(biome).grass;
-  } else if (info.foliage) {
-    color = getBiomeColor(biome).foliage;
+  if (info.grass || info.foliage) {
+    const biomeColor = BIOME_COLORS[biome] || DEFAULT_BIOME;
+    color = info.grass ? biomeColor.grass : biomeColor.foliage;
   }
   
   if (hasWaterOverlay) {
-    const waterColor = getBiomeColor(biome).water;
-    const waterAlpha = 191;
-    const waterWeight = waterAlpha / 255;
-    const blockWeight = 1 - waterWeight;
-    
-    const r = Math.floor(((color >> 16) & 0xFF) * blockWeight + ((waterColor >> 16) & 0xFF) * waterWeight);
-    const g = Math.floor(((color >> 8) & 0xFF) * blockWeight + ((waterColor >> 8) & 0xFF) * waterWeight);
-    const b = Math.floor((color & 0xFF) * blockWeight + (waterColor & 0xFF) * waterWeight);
-    
+    const biomeColor = BIOME_COLORS[biome] || DEFAULT_BIOME;
+    const waterColor = biomeColor.water;
+    const r = (((color >> 16) & 0xFF) * 64 + ((waterColor >> 16) & 0xFF) * 191) >> 8;
+    const g = (((color >> 8) & 0xFF) * 64 + ((waterColor >> 8) & 0xFF) * 191) >> 8;
+    const b = ((color & 0xFF) * 64 + (waterColor & 0xFF) * 191) >> 8;
     color = (r << 16) | (g << 8) | b;
     alpha = 255;
   }
@@ -741,18 +838,14 @@ function applyShading(color, height, prevHeight, prevDiagHeight, light) {
   let g = (color >> 8) & 0xFF;
   let b = color & 0xFF;
   
-  const ambientLight = 0;
-  const maxDirectLight = 0.8;
-  
   let depthBrightness = 1.0;
-  if (height !== 32767 && height >= 0 && height <= 63) {
-    depthBrightness = height / 63.0;
-    depthBrightness = Math.max(0.6, Math.min(1.0, depthBrightness));
+  
+  if (height >= 0 && height <= 63) {
+    depthBrightness = 0.6 + (height / 63.0) * 0.4;
   }
   
   if (prevHeight !== 32767 && prevDiagHeight !== 32767) {
     const verticalSlope = height - prevHeight;
-    
     if (verticalSlope > 0) {
       depthBrightness *= 1.3;
     } else if (verticalSlope < 0) {
@@ -760,19 +853,18 @@ function applyShading(color, height, prevHeight, prevDiagHeight, light) {
     }
   }
   
-  const brightness = ambientLight + maxDirectLight * depthBrightness;
+  const brightness = 0.8 * depthBrightness;
   
   if (light < 15) {
-    const lightMin = 9;
-    const lightFactor = (lightMin + Math.max(0, light)) / (15 + lightMin);
-    r = Math.floor(r * lightFactor);
-    g = Math.floor(g * lightFactor);
-    b = Math.floor(b * lightFactor);
+    const lightFactor = (9 + light) / 24;
+    r = (r * lightFactor) | 0;
+    g = (g * lightFactor) | 0;
+    b = (b * lightFactor) | 0;
   }
   
-  r = Math.min(255, Math.floor(r * brightness));
-  g = Math.min(255, Math.floor(g * brightness));
-  b = Math.min(255, Math.floor(b * brightness));
+  r = Math.min(255, (r * brightness) | 0);
+  g = Math.min(255, (g * brightness) | 0);
+  b = Math.min(255, (b * brightness) | 0);
   
   return (r << 16) | (g << 8) | b;
 }
@@ -783,36 +875,56 @@ function renderRegionToPixels(regionData) {
   const heights = new Int16Array(size * size);
   heights.fill(32767);
   
+  const chunks = regionData.chunks;
+  
   for (let chunkX = 0; chunkX < 8; chunkX++) {
+    const chunkRow = chunks[chunkX];
+    if (!chunkRow) continue;
+    
     for (let chunkZ = 0; chunkZ < 8; chunkZ++) {
-      const chunk = regionData.chunks[chunkX]?.[chunkZ];
+      const chunk = chunkRow[chunkZ];
       if (!chunk) continue;
       
+      const tiles = chunk.tiles;
+      const baseX = chunkX * 64;
+      const baseZ = chunkZ * 64;
+      
       for (let tileX = 0; tileX < 4; tileX++) {
+        const tileRow = tiles[tileX];
+        if (!tileRow) continue;
+        
         for (let tileZ = 0; tileZ < 4; tileZ++) {
-          const tile = chunk.tiles[tileX]?.[tileZ];
+          const tile = tileRow[tileZ];
           if (!tile || !tile.blocks) continue;
           
+          const blocks = tile.blocks;
+          const pixelBaseX = baseX + tileX * 16;
+          const pixelBaseZ = baseZ + tileZ * 16;
+          
           for (let x = 0; x < 16; x++) {
+            const blockRow = blocks[x];
+            if (!blockRow) continue;
+            
+            const pixelX = pixelBaseX + x;
+            if (pixelX >= size) continue;
+            
             for (let z = 0; z < 16; z++) {
-              const block = tile.blocks[x]?.[z];
+              const block = blockRow[z];
               if (!block || !block.s) continue;
               
-              const pixelX = chunkX * 64 + tileX * 16 + x;
-              const pixelZ = chunkZ * 64 + tileZ * 16 + z;
-              
-              if (pixelX >= size || pixelZ >= size) continue;
+              const pixelZ = pixelBaseZ + z;
+              if (pixelZ >= size) continue;
               
               const idx = pixelZ * size + pixelX;
-              heights[idx] = block.h || 32767;
+              const height = block.h ?? 32767;
+              heights[idx] = height;
               
-              const height = heights[idx];
               const prevHeight = pixelZ > 0 ? heights[idx - size] : 32767;
               const prevDiagHeight = (pixelZ > 0 && pixelX > 0) ? heights[idx - size - 1] : 32767;
               
               const { color, alpha } = computeBlockColor(block.s, block.b, block.w);
-              const shadedColor = applyShading(color, height, prevHeight, prevDiagHeight, block.l || 15);
-              const pixelIdx = idx * 4;
+              const shadedColor = applyShading(color, height, prevHeight, prevDiagHeight, block.l ?? 15);
+              const pixelIdx = idx << 2;
               
               pixels[pixelIdx] = (shadedColor >> 16) & 0xFF;
               pixels[pixelIdx + 1] = (shadedColor >> 8) & 0xFF;
@@ -840,7 +952,7 @@ app.post('/api/set-directory', async (req, res) => {
   }
   
   mapDirectory = directory;
-  saveConfig();
+  saveUserConfig();
   res.json({ success: true, directory });
 });
 
@@ -859,7 +971,13 @@ app.post('/api/set-cache-directory', async (req, res) => {
     cacheDirectory = directory;
     pixelCache.clear();
     pixelCacheOrder.length = 0;
-    saveConfig();
+    
+    if (db) {
+      db.close();
+    }
+    initDatabase();
+    
+    saveUserConfig();
     
     res.json({ success: true, directory: cacheDirectory });
   } catch (error) {
@@ -873,12 +991,16 @@ app.get('/api/cache-directory', (req, res) => {
 
 app.get('/api/cache-size', async (req, res) => {
   try {
-    if (!existsSync(cacheDirectory)) {
-      return res.json({ count: 0, sizeMB: 0 });
+    if (db) {
+      const row = db.prepare('SELECT COUNT(*) as count FROM region_cache').get();
+      const sizeRow = db.prepare('SELECT SUM(LENGTH(data)) as totalSize FROM region_cache').get();
+      const count = row?.count || 0;
+      const totalSize = sizeRow?.totalSize || 0;
+      const sizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+      res.json({ count, sizeMB: parseFloat(sizeMB) });
+    } else {
+      res.json({ count: 0, sizeMB: 0 });
     }
-    const files = await readdir(cacheDirectory);
-    const count = files.filter(f => f.endsWith('.bin')).length;
-    res.json({ count, sizeMB: count });
   } catch (error) {
     res.status(500).json({ error: String(error) });
   }
@@ -889,13 +1011,9 @@ app.delete('/api/cache-directory', async (req, res) => {
     pixelCache.clear();
     pixelCacheOrder.length = 0;
     
-    if (existsSync(cacheDirectory)) {
-      const files = await readdir(cacheDirectory);
-      for (const file of files) {
-        if (file.endsWith('.bin')) {
-          await unlink(path.join(cacheDirectory, file));
-        }
-      }
+    if (db) {
+      db.exec('DELETE FROM region_cache');
+      db.exec('VACUUM');
     }
     
     res.json({ success: true, message: '缓存已清除' });
@@ -973,7 +1091,7 @@ app.get('/api/worlds/:worldName/dimensions/:dimName/regions', async (req, res) =
 });
 
 app.get('/api/region-pixels', async (req, res) => {
-  const { world, dim, x, z, mapType, caveMode, caveStart } = req.query;
+  const { world, dim, x, z, mapType, caveMode, caveStart, lod } = req.query;
   
   if (!dim || x === undefined || z === undefined) {
     return res.status(400).json({ error: '缺少参数' });
@@ -993,7 +1111,8 @@ app.get('/api/region-pixels', async (req, res) => {
     
     const caveModeValue = caveMode !== undefined ? parseInt(String(caveMode)) : null;
     const caveStartValue = caveStart !== undefined ? parseInt(String(caveStart)) : null;
-    const pixels = await loadRegionPixels(dimPath, parseInt(String(x)), parseInt(String(z)), caveModeValue, caveStartValue);
+    const lodValue = lod !== undefined ? parseInt(String(lod)) : 0;
+    const pixels = await loadRegionPixels(dimPath, parseInt(String(x)), parseInt(String(z)), caveModeValue, caveStartValue, lodValue);
     if (!pixels) {
       return res.status(404).json({ error: '区域不存在' });
     }
@@ -1008,11 +1127,15 @@ app.get('/api/region-pixels', async (req, res) => {
 });
 
 app.get('/api/batch-regions', async (req, res) => {
-  const { world, dim, coords, mapType, caveMode, caveStart } = req.query;
+  const { world, dim, coords, mapType, caveMode, caveStart, lod, viewStartX, viewStartZ, viewEndX, viewEndZ } = req.query;
   
   if (!dim || !coords) {
     return res.status(400).json({ error: '缺少参数' });
   }
+  
+  let isCancelled = false;
+  const cancelHandler = () => { isCancelled = true; };
+  req.on('close', cancelHandler);
   
   try {
     let basePath = mapDirectory;
@@ -1028,53 +1151,91 @@ app.get('/api/batch-regions', async (req, res) => {
     
     const caveModeValue = caveMode !== undefined ? parseInt(String(caveMode)) : null;
     const caveStartValue = caveStart !== undefined ? parseInt(String(caveStart)) : null;
+    const lodValue = lod !== undefined ? parseInt(String(lod)) : 0;
+    
+    const hasViewport = viewStartX !== undefined && viewStartZ !== undefined && 
+                        viewEndX !== undefined && viewEndZ !== undefined;
+    const vx0 = hasViewport ? parseInt(String(viewStartX)) : null;
+    const vz0 = hasViewport ? parseInt(String(viewStartZ)) : null;
+    const vx1 = hasViewport ? parseInt(String(viewEndX)) : null;
+    const vz1 = hasViewport ? parseInt(String(viewEndZ)) : null;
     
     const coordPairs = String(coords).split(';').map(s => {
       const parts = s.split(',');
       return { x: parseInt(parts[0]), z: parseInt(parts[1]) };
-    }).filter(c => !isNaN(c.x) && !isNaN(c.z)).slice(0, 20);
+    }).filter(c => !isNaN(c.x) && !isNaN(c.z)).slice(0, MAX_BATCH_REGIONS);
     
-    const REGION_PIXEL_SIZE = 512 * 512 * 4;
-    const totalRegions = coordPairs.length;
-    const buffer = Buffer.alloc(4 + totalRegions * 12 + totalRegions * REGION_PIXEL_SIZE);
+    const filteredPairs = hasViewport 
+      ? coordPairs.filter(c => c.x >= vx0 && c.x <= vx1 && c.z >= vz0 && c.z <= vz1)
+      : coordPairs;
     
-    buffer.writeUInt32LE(totalRegions, 0);
+    const totalRegions = filteredPairs.length;
+    if (totalRegions === 0) {
+      req.off('close', cancelHandler);
+      const emptyBuffer = Buffer.alloc(8);
+      emptyBuffer.writeUInt32LE(0, 0);
+      emptyBuffer.writeUInt32LE(lodValue, 4);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Length', emptyBuffer.length);
+      return res.send(emptyBuffer);
+    }
+    
+    const lodSize = 512 >> lodValue;
+    const REGION_PIXEL_SIZE = lodSize * lodSize * 4;
     
     const results = [];
-    for (let i = 0; i < totalRegions; i += MAX_CONCURRENT_LOADS) {
-      const batch = coordPairs.slice(i, i + MAX_CONCURRENT_LOADS);
+    for (let i = 0; i < totalRegions && !isCancelled; i += MAX_CONCURRENT_LOADS) {
+      const batch = filteredPairs.slice(i, i + MAX_CONCURRENT_LOADS);
       const batchResults = await Promise.all(
-        batch.map(coord => loadRegionPixels(dimPath, coord.x, coord.z, caveModeValue, caveStartValue))
+        batch.map(coord => loadRegionPixels(dimPath, coord.x, coord.z, caveModeValue, caveStartValue, lodValue))
       );
       results.push(...batchResults);
-      
-      if (i % (MAX_CONCURRENT_LOADS * 4) === 0) {
-        pruneMemoryCache();
-      }
+      pruneMemoryCache();
     }
     
-    let offset = 4;
+    if (isCancelled) {
+      req.off('close', cancelHandler);
+      return;
+    }
+    
+    let totalSize = 4 + 4;
     for (let i = 0; i < totalRegions; i++) {
-      buffer.writeInt32LE(coordPairs[i].x, offset);
-      buffer.writeInt32LE(coordPairs[i].z, offset + 4);
+      totalSize += 12 + (results[i] ? results[i].length : REGION_PIXEL_SIZE);
+    }
+    
+    const buffer = Buffer.alloc(totalSize);
+    let offset = 0;
+    
+    buffer.writeUInt32LE(totalRegions, offset);
+    offset += 4;
+    buffer.writeUInt32LE(lodValue, offset);
+    offset += 4;
+    
+    for (let i = 0; i < totalRegions; i++) {
+      buffer.writeInt32LE(filteredPairs[i].x, offset);
+      buffer.writeInt32LE(filteredPairs[i].z, offset + 4);
       
       if (results[i]) {
-        buffer.writeUInt32LE(1, offset + 8);
+        buffer.writeUInt32LE(results[i].length, offset + 8);
         results[i].copy(buffer, offset + 12);
+        offset += 12 + results[i].length;
       } else {
-        buffer.writeUInt32LE(0, offset + 8);
+        buffer.writeUInt32LE(REGION_PIXEL_SIZE, offset + 8);
         buffer.fill(0, offset + 12, offset + 12 + REGION_PIXEL_SIZE);
+        offset += 12 + REGION_PIXEL_SIZE;
       }
-      
-      offset += 12 + REGION_PIXEL_SIZE;
     }
     
+    results.length = 0;
     pruneMemoryCache();
+    if (global.gc) global.gc();
     
+    req.off('close', cancelHandler);
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Length', buffer.length);
     res.send(buffer);
   } catch (error) {
+    req.off('close', cancelHandler);
     console.error('Error batch loading regions:', error);
     res.status(500).json({ error: String(error) });
   }
@@ -1593,7 +1754,9 @@ function readTagValue(data, view, offset, type) {
 
 app.listen(PORT, async () => {
   await ensureCacheDir();
+  initDatabase();
   console.log(`Xaero Map Server running at http://localhost:${PORT}`);
   console.log(`Default directory: ${mapDirectory}`);
-  console.log(`Pixel cache: ${cacheDirectory}`);
+  console.log(`Cache database: ${path.join(cacheDirectory, 'cache.db')}`);
+  console.log(`Config: maxCacheEntries=${MAX_MEMORY_CACHE_ENTRIES}, maxConcurrentLoads=${MAX_CONCURRENT_LOADS}, maxBatchRegions=${MAX_BATCH_REGIONS}`);
 });
