@@ -66,6 +66,8 @@ export class MapRenderer {
   private overlayCtx: CanvasRenderingContext2D;
   private options: RenderOptions = DEFAULT_OPTIONS;
   
+  private devicePixelRatio: number;
+  
   private offsetX: number = 0;
   private offsetZ: number = 0;
   private scale: number = 1;
@@ -75,6 +77,13 @@ export class MapRenderer {
   private lastMouseY: number = 0;
   private mouseWorldX: number | null = null;
   private mouseWorldZ: number | null = null;
+  
+  private touchStartDistance: number | null = null;
+  private touchStartScale: number | null = null;
+  private lastTouchX: number = 0;
+  private lastTouchY: number = 0;
+  
+  private currentDim: string | null = null;
   
   private onViewportChange: ((bounds: ViewportBounds) => void) | null = null;
   private loadedRegionKeys: Set<string> = new Set();
@@ -99,6 +108,7 @@ export class MapRenderer {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    this.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
     
     const gl = canvas.getContext('webgl', {
       alpha: false,
@@ -171,12 +181,27 @@ export class MapRenderer {
     this.onViewportChange = callback;
   }
 
+  setCurrentDimension(dim: string | null): void {
+    this.currentDim = dim;
+  }
+
+  private isNetherDimension(): boolean {
+    if (!this.currentDim) return false;
+    const dim = this.currentDim.toLowerCase();
+    return dim.includes('nether') || 
+           this.currentDim.includes('DIM-1') || 
+           dim.includes('下界');
+  }
+
   private setupEventListeners(): void {
     this.canvas.addEventListener('wheel', this.handleWheel.bind(this));
     this.canvas.addEventListener('mousedown', this.handleMouseDown.bind(this));
     this.canvas.addEventListener('mousemove', this.handleMouseMove.bind(this));
     this.canvas.addEventListener('mouseup', this.handleMouseUp.bind(this));
     this.canvas.addEventListener('mouseleave', this.handleMouseUp.bind(this));
+    this.canvas.addEventListener('touchstart', this.handleTouchStart.bind(this), { passive: false });
+    this.canvas.addEventListener('touchmove', this.handleTouchMove.bind(this), { passive: false });
+    this.canvas.addEventListener('touchend', this.handleTouchEnd.bind(this));
     window.addEventListener('resize', this.resize.bind(this));
   }
 
@@ -206,7 +231,6 @@ export class MapRenderer {
       this.isDragging = true;
       this.lastMouseX = e.clientX;
       this.lastMouseY = e.clientY;
-      this.canvas.style.cursor = 'grabbing';
     }
   }
 
@@ -239,7 +263,113 @@ export class MapRenderer {
 
   private handleMouseUp(): void {
     this.isDragging = false;
-    this.canvas.style.cursor = 'grab';
+  }
+
+  private getTouchDistance(touches: TouchList): number {
+    if (touches.length < 2) return 0;
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  private getTouchCenter(touches: TouchList): { x: number; y: number } {
+    if (touches.length === 1) {
+      return { x: touches[0].clientX, y: touches[0].clientY };
+    }
+    return {
+      x: (touches[0].clientX + touches[1].clientX) / 2,
+      y: (touches[0].clientY + touches[1].clientY) / 2
+    };
+  }
+
+  private handleTouchStart(e: TouchEvent): void {
+    e.preventDefault();
+    
+    if (e.touches.length === 1) {
+      this.isDragging = true;
+      this.lastTouchX = e.touches[0].clientX;
+      this.lastTouchY = e.touches[0].clientY;
+      
+      const rect = this.canvas.getBoundingClientRect();
+      const touchX = e.touches[0].clientX - rect.left;
+      const touchY = e.touches[0].clientY - rect.top;
+      this.mouseWorldX = Math.floor((touchX - this.offsetX) / this.scale);
+      this.mouseWorldZ = Math.floor((touchY - this.offsetZ) / this.scale);
+      this.updateCoordsDisplay(this.mouseWorldX, this.mouseWorldZ);
+      this.scheduleRender();
+    } else if (e.touches.length === 2) {
+      this.isDragging = false;
+      this.touchStartDistance = this.getTouchDistance(e.touches);
+      this.touchStartScale = this.scale;
+      const center = this.getTouchCenter(e.touches);
+      this.lastTouchX = center.x;
+      this.lastTouchY = center.y;
+    }
+  }
+
+  private handleTouchMove(e: TouchEvent): void {
+    e.preventDefault();
+    
+    if (e.touches.length === 1 && this.isDragging) {
+      const rect = this.canvas.getBoundingClientRect();
+      const touchX = e.touches[0].clientX - rect.left;
+      const touchY = e.touches[0].clientY - rect.top;
+      
+      this.mouseWorldX = Math.floor((touchX - this.offsetX) / this.scale);
+      this.mouseWorldZ = Math.floor((touchY - this.offsetZ) / this.scale);
+      this.updateCoordsDisplay(this.mouseWorldX, this.mouseWorldZ);
+      
+      const deltaX = e.touches[0].clientX - this.lastTouchX;
+      const deltaY = e.touches[0].clientY - this.lastTouchY;
+      this.offsetX += deltaX;
+      this.offsetZ += deltaY;
+      this.lastTouchX = e.touches[0].clientX;
+      this.lastTouchY = e.touches[0].clientY;
+      this.scheduleRender();
+      this.notifyViewportChange();
+    } else if (e.touches.length === 2 && this.touchStartDistance !== null && this.touchStartScale !== null) {
+      const currentDistance = this.getTouchDistance(e.touches);
+      const scaleRatio = currentDistance / this.touchStartDistance;
+      const newScale = Math.max(0.005, Math.min(16, this.touchStartScale * scaleRatio));
+      
+      const center = this.getTouchCenter(e.touches);
+      const rect = this.canvas.getBoundingClientRect();
+      const touchX = center.x - rect.left;
+      const touchY = center.y - rect.top;
+      
+      const worldX = (touchX - this.offsetX) / this.scale;
+      const worldZ = (touchY - this.offsetZ) / this.scale;
+      
+      this.scale = newScale;
+      this.offsetX = touchX - worldX * this.scale;
+      this.offsetZ = touchY - worldZ * this.scale;
+      
+      this.mouseWorldX = Math.floor(worldX);
+      this.mouseWorldZ = Math.floor(worldZ);
+      this.updateCoordsDisplay(this.mouseWorldX, this.mouseWorldZ);
+      
+      this.lastTouchX = center.x;
+      this.lastTouchY = center.y;
+      
+      this.updateLodLevel();
+      this.scheduleRender();
+      this.updateZoomDisplay();
+      this.notifyViewportChange();
+    }
+  }
+
+  private handleTouchEnd(e: TouchEvent): void {
+    if (e.touches.length === 0) {
+      this.isDragging = false;
+      this.touchStartDistance = null;
+      this.touchStartScale = null;
+    } else if (e.touches.length === 1) {
+      this.isDragging = true;
+      this.lastTouchX = e.touches[0].clientX;
+      this.lastTouchY = e.touches[0].clientY;
+      this.touchStartDistance = null;
+      this.touchStartScale = null;
+    }
   }
 
   private notifyViewportChange(): void {
@@ -250,10 +380,12 @@ export class MapRenderer {
   }
 
   getViewportBounds(): ViewportBounds {
+    const displayWidth = this.canvas.width / this.devicePixelRatio;
+    const displayHeight = this.canvas.height / this.devicePixelRatio;
     const startX = Math.floor(-this.offsetX / this.scale / REGION_SIZE) - 1;
     const startZ = Math.floor(-this.offsetZ / this.scale / REGION_SIZE) - 1;
-    const endX = Math.ceil((this.canvas.width - this.offsetX) / this.scale / REGION_SIZE) + 1;
-    const endZ = Math.ceil((this.canvas.height - this.offsetZ) / this.scale / REGION_SIZE) + 1;
+    const endX = Math.ceil((displayWidth - this.offsetX) / this.scale / REGION_SIZE) + 1;
+    const endZ = Math.ceil((displayHeight - this.offsetZ) / this.scale / REGION_SIZE) + 1;
     
     return { startX, startZ, endX, endZ };
   }
@@ -261,7 +393,8 @@ export class MapRenderer {
   private updateCoordsDisplay(x: number, z: number): void {
     const coordsEl = document.getElementById('coords');
     if (coordsEl) {
-      coordsEl.textContent = `X: ${x}, Z: ${z}`;
+      const text = `X: ${x}, Z: ${z}`;
+      coordsEl.textContent = text;
     }
   }
 
@@ -284,19 +417,34 @@ export class MapRenderer {
     const container = this.canvas.parentElement;
     if (!container) return;
     
-    this.canvas.width = container.clientWidth;
-    this.canvas.height = container.clientHeight;
+    const displayWidth = container.clientWidth;
+    const displayHeight = container.clientHeight;
     
-    this.overlayCanvas.width = container.clientWidth;
-    this.overlayCanvas.height = container.clientHeight;
+    this.canvas.style.width = displayWidth + 'px';
+    this.canvas.style.height = displayHeight + 'px';
     
-    this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    const actualWidth = Math.floor(displayWidth * this.devicePixelRatio);
+    const actualHeight = Math.floor(displayHeight * this.devicePixelRatio);
+    
+    this.canvas.width = actualWidth;
+    this.canvas.height = actualHeight;
+    
+    this.overlayCanvas.style.width = displayWidth + 'px';
+    this.overlayCanvas.style.height = displayHeight + 'px';
+    this.overlayCanvas.width = Math.floor(displayWidth * this.devicePixelRatio);
+    this.overlayCanvas.height = Math.floor(displayHeight * this.devicePixelRatio);
+    
+    this.overlayCtx.scale(this.devicePixelRatio, this.devicePixelRatio);
+    
+    this.gl.viewport(0, 0, actualWidth, actualHeight);
     this.scheduleRender();
   }
 
   setScale(scale: number): void {
-    const centerX = this.canvas.width / 2;
-    const centerZ = this.canvas.height / 2;
+    const displayWidth = this.canvas.width / this.devicePixelRatio;
+    const displayHeight = this.canvas.height / this.devicePixelRatio;
+    const centerX = displayWidth / 2;
+    const centerZ = displayHeight / 2;
     const worldX = (centerX - this.offsetX) / this.scale;
     const worldZ = (centerZ - this.offsetZ) / this.scale;
     
@@ -312,8 +460,30 @@ export class MapRenderer {
   }
 
   centerOn(x: number, z: number): void {
-    this.offsetX = this.canvas.width / 2 - x * this.scale;
-    this.offsetZ = this.canvas.height / 2 - z * this.scale;
+    const displayWidth = this.canvas.width / this.devicePixelRatio;
+    const displayHeight = this.canvas.height / this.devicePixelRatio;
+    this.offsetX = displayWidth / 2 - x * this.scale;
+    this.offsetZ = displayHeight / 2 - z * this.scale;
+    this.scheduleRender();
+    this.notifyViewportChange();
+  }
+
+  getViewState(): { scale: number; centerX: number; centerZ: number } {
+    const displayWidth = this.canvas.width / this.devicePixelRatio;
+    const displayHeight = this.canvas.height / this.devicePixelRatio;
+    const centerX = (displayWidth / 2 - this.offsetX) / this.scale;
+    const centerZ = (displayHeight / 2 - this.offsetZ) / this.scale;
+    return { scale: this.scale, centerX, centerZ };
+  }
+
+  setViewState(scale: number, centerX: number, centerZ: number): void {
+    const displayWidth = this.canvas.width / this.devicePixelRatio;
+    const displayHeight = this.canvas.height / this.devicePixelRatio;
+    this.scale = Math.max(0.005, Math.min(16, scale));
+    this.offsetX = displayWidth / 2 - centerX * this.scale;
+    this.offsetZ = displayHeight / 2 - centerZ * this.scale;
+    this.updateLodLevel();
+    this.updateZoomDisplay();
     this.scheduleRender();
     this.notifyViewportChange();
   }
@@ -536,25 +706,51 @@ export class MapRenderer {
   
   private renderOverlay(): void {
     const ctx = this.overlayCtx;
-    const w = this.overlayCanvas.width;
-    const h = this.overlayCanvas.height;
+    const w = this.overlayCanvas.width / this.devicePixelRatio;
+    const h = this.overlayCanvas.height / this.devicePixelRatio;
     
+    ctx.setTransform(this.devicePixelRatio, 0, 0, this.devicePixelRatio, 0, 0);
     ctx.clearRect(0, 0, w, h);
     
     if (this.mouseWorldX !== null && this.mouseWorldZ !== null) {
-      const text = `X: ${this.mouseWorldX}, Z: ${this.mouseWorldZ}`;
+      const isNether = this.isNetherDimension();
       
-      ctx.font = 'bold 16px sans-serif';
+      let text: string;
+      if (isNether) {
+        const overworldX = this.mouseWorldX * 8;
+        const overworldZ = this.mouseWorldZ * 8;
+        text = `X: ${this.mouseWorldX}, Z: ${this.mouseWorldZ}  [X: ${overworldX}, Z: ${overworldZ}]`;
+      } else {
+        const netherX = Math.floor(this.mouseWorldX / 8);
+        const netherZ = Math.floor(this.mouseWorldZ / 8);
+        text = `X: ${this.mouseWorldX}, Z: ${this.mouseWorldZ}  [X: ${netherX}, Z: ${netherZ}]`;
+      }
+      
+      let fontSize = 24;
+      const minFontSize = 14;
+      const padding = 16;
+      const maxWidth = w - padding * 2;
+      
+      ctx.font = `${fontSize}px "Minecraft", "Courier New", monospace`;
+      let textWidth = ctx.measureText(text).width;
+      
+      while (textWidth > maxWidth && fontSize > minFontSize) {
+        fontSize -= 1;
+        ctx.font = `${fontSize}px "Minecraft", "Courier New", monospace`;
+        textWidth = ctx.measureText(text).width;
+      }
+      
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       
       const x = w / 2;
-      const y = 10;
+      const y = 12;
+      const boxHeight = fontSize + 8;
       
-      ctx.fillStyle = 'black';
-      ctx.fillText(text, x + 2, y + 2);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(x - textWidth / 2 - 8, y - 4, textWidth + 16, boxHeight);
       
-      ctx.fillStyle = 'white';
+      ctx.fillStyle = '#FFFFFF';
       ctx.fillText(text, x, y);
     }
   }
@@ -563,9 +759,9 @@ export class MapRenderer {
     const gl = this.gl;
     const canvasW = this.canvas.width;
     const canvasH = this.canvas.height;
-    const scale = this.scale;
-    const offX = this.offsetX;
-    const offZ = this.offsetZ;
+    const scale = this.scale * this.devicePixelRatio;
+    const offX = this.offsetX * this.devicePixelRatio;
+    const offZ = this.offsetZ * this.devicePixelRatio;
     const spr = this.slotsPerRow;
     const now = Date.now();
     

@@ -1,14 +1,68 @@
+@font-face {
+  font-family: 'Minecraft';
+  src: url('/fonts/minecraft.woff2') format('woff2'),
+       url('/fonts/minecraft.woff') format('woff'),
+       url('/fonts/minecraft.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+:root {
+  --mc-dirt-brown: #8B5A2B;
+  --mc-dirt-dark: #6B4423;
+  --mc-dirt-light: #9D6B3F;
+  --mc-grass-green: #71A033;
+  --mc-grass-dark: #5A8029;
+  --mc-grass-light: #8BC43F;
+  --mc-wood: #A67C52;
+  --mc-wood-dark: #8B6642;
+  --mc-wood-light: #B8956A;
+  --mc-stone: #A0A0A0;
+  --mc-stone-dark: #7A7A7A;
+  --mc-stone-light: #BEBEBE;
+  --mc-cobblestone: #808080;
+  --mc-obsidian: #0F0B19;
+  --mc-diamond: #62EDE4;
+  --mc-emerald: #2ACB58;
+  --mc-redstone: #B01905;
+  --mc-gold: #F6D03E;
+  --mc-lapis: #1F438C;
+  --mc-netherrack: #622626;
+  --mc-end-stone: #DCDF9E;
+  --mc-water: #3F76E4;
+  --mc-lava: #CF4919;
+  --mc-sky-blue: #78A7FF;
+  --mc-night-sky: #0F0F1A;
+  --mc-text-white: #FFFFFF;
+  --mc-text-yellow: #FFFF55;
+  --mc-text-green: #55FF55;
+  --mc-text-red: #FF5555;
+  --mc-text-gray: #AAAAAA;
+  --mc-bg-dark: #1A1A1A;
+  --mc-bg-panel: #2A2A2A;
+  --mc-border-dark: #1A1A1A;
+  --mc-border-light: #5A5A5A;
+  --mc-shadow: rgba(0, 0, 0, 0.8);
+  --mc-highlight: rgba(255, 255, 255, 0.2);
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: #1a1a2e;
-  color: #eee;
+  font-family: 'Minecraft', 'Courier New', monospace;
+  background: linear-gradient(180deg, var(--mc-night-sky) 0%, #0A0A12 100%);
+  color: var(--mc-text-white);
   overflow: hidden;
+  font-size: 18px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 #app {
@@ -18,61 +72,126 @@ body {
 }
 
 #sidebar {
-  width: 280px;
-  background: #16213e;
-  padding: 15px;
+  width: 300px;
+  background: linear-gradient(180deg, 
+    var(--mc-bg-panel) 0%, 
+    var(--mc-bg-dark) 100%
+  );
+  padding: 0;
   overflow-y: auto;
-  border-right: 1px solid #0f3460;
+  border-right: 4px solid var(--mc-dirt-brown);
   flex-shrink: 0;
   transition: transform 0.3s ease;
+  box-shadow: 
+    inset -4px 0 0 var(--mc-dirt-dark),
+    inset 4px 0 0 var(--mc-dirt-light),
+    inset 0 4px 0 var(--mc-grass-green),
+    inset 0 -4px 0 var(--mc-dirt-brown);
+}
+
+#sidebar::-webkit-scrollbar {
+  width: 12px;
+}
+
+#sidebar::-webkit-scrollbar-track {
+  background: var(--mc-bg-dark);
+  border-left: 2px solid var(--mc-stone-dark);
+}
+
+#sidebar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--mc-stone-light) 0%, var(--mc-stone) 50%, var(--mc-stone-dark) 100%);
+  border: 2px solid var(--mc-stone-dark);
+  box-shadow: inset 2px 2px 0 var(--mc-highlight);
+}
+
+#sidebar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, var(--mc-wood-light) 0%, var(--mc-wood) 50%, var(--mc-wood-dark) 100%);
 }
 
 #sidebar h2 {
-  color: #e94560;
-  margin-bottom: 12px;
-  font-size: 1.2em;
+  color: var(--mc-text-yellow);
+  margin: 0;
+  padding: 16px 12px;
+  font-size: 22px;
   text-align: center;
+  text-shadow: 
+    2px 2px 0 #3F3F00,
+    -1px -1px 0 #3F3F00;
+  background: linear-gradient(180deg, 
+    var(--mc-grass-green) 0%, 
+    var(--mc-grass-dark) 100%
+  );
+  border-bottom: 4px solid var(--mc-dirt-brown);
+  box-shadow: 
+    inset 0 -4px 0 var(--mc-dirt-dark),
+    inset 0 4px 0 var(--mc-grass-light);
+  letter-spacing: 1px;
 }
 
 .status {
-  padding: 8px 12px;
-  background: #0f3460;
-  border-radius: 4px;
-  margin-bottom: 12px;
-  font-size: 0.85em;
-  color: #aaa;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, var(--mc-stone) 0%, var(--mc-stone-dark) 100%);
+  margin: 12px;
+  font-size: 16px;
+  color: var(--mc-text-green);
   text-align: center;
+  border: 4px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3),
+    4px 4px 0 rgba(0, 0, 0, 0.5);
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
 }
 
 .section {
-  background: #0f3460;
-  border-radius: 6px;
-  padding: 12px;
-  margin-bottom: 12px;
+  background: linear-gradient(180deg, 
+    var(--mc-bg-panel) 0%, 
+    rgba(26, 26, 26, 0.95) 100%
+  );
+  margin: 0 12px 12px 12px;
+  padding: 0;
+  border: 4px solid;
+  border-color: var(--mc-wood-light) var(--mc-wood-dark) var(--mc-wood-dark) var(--mc-wood-light);
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.4),
+    4px 4px 0 rgba(0, 0, 0, 0.6);
 }
 
 .section-title {
-  color: #e94560;
-  font-size: 0.9em;
-  font-weight: 600;
-  margin-bottom: 10px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid #1a3a5c;
+  color: var(--mc-text-yellow);
+  font-size: 18px;
+  font-weight: normal;
+  padding: 10px 12px;
+  margin: 0;
+  background: linear-gradient(180deg, 
+    var(--mc-wood) 0%, 
+    var(--mc-wood-dark) 100%
+  );
+  border-bottom: 3px solid var(--mc-dirt-brown);
+  text-shadow: 
+    2px 2px 0 #3F2A15,
+    -1px -1px 0 #3F2A15;
+  letter-spacing: 0.5px;
 }
 
 .control-group {
-  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-bottom: 2px solid rgba(139, 90, 43, 0.3);
 }
 
 .control-group:last-child {
-  margin-bottom: 0;
+  border-bottom: none;
 }
 
 .control-group label {
   display: block;
-  margin-bottom: 4px;
-  color: #8aa;
-  font-size: 0.8em;
+  margin-bottom: 6px;
+  color: var(--mc-text-gray);
+  font-size: 16px;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  letter-spacing: 0.5px;
 }
 
 .control-group.inline {
@@ -89,7 +208,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 .inline-label label {
@@ -97,14 +216,15 @@ body {
 }
 
 .value {
-  color: #e94560;
-  font-weight: bold;
-  font-size: 0.9em;
+  color: var(--mc-text-yellow);
+  font-weight: normal;
+  font-size: 16px;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
 }
 
 .input-row {
   display: flex;
-  gap: 6px;
+  gap: 8px;
 }
 
 .input-row input {
@@ -113,145 +233,328 @@ body {
 
 .control-group input[type="text"] {
   width: 100%;
-  padding: 6px 10px;
-  background: #1a1a2e;
-  border: 1px solid #2a3a5c;
-  border-radius: 4px;
-  color: #eee;
-  font-size: 0.85em;
+  padding: 8px 12px;
+  background: var(--mc-bg-dark);
+  border: 3px solid;
+  border-color: var(--mc-stone-dark) var(--mc-stone-light) var(--mc-stone-light) var(--mc-stone-dark);
+  color: var(--mc-text-white);
+  font-size: 16px;
+  font-family: 'Minecraft', 'Courier New', monospace;
+  box-shadow: 
+    inset 2px 2px 4px rgba(0, 0, 0, 0.5),
+    inset -1px -1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .control-group input[type="text"]:focus {
   outline: none;
-  border-color: #e94560;
+  border-color: var(--mc-diamond) var(--mc-emerald) var(--mc-emerald) var(--mc-diamond);
+  box-shadow: 
+    inset 2px 2px 4px rgba(0, 0, 0, 0.5),
+    0 0 8px var(--mc-diamond);
 }
 
 .control-group input[type="text"]::placeholder {
-  color: #555;
+  color: var(--mc-stone-dark);
 }
 
 .control-group select {
   width: 100%;
-  padding: 6px 10px;
-  background: #1a1a2e;
-  border: 1px solid #2a3a5c;
-  border-radius: 4px;
-  color: #eee;
-  font-size: 0.85em;
+  padding: 8px 12px;
+  background: linear-gradient(180deg, var(--mc-stone-light) 0%, var(--mc-stone) 50%, var(--mc-stone-dark) 100%);
+  border: 3px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  color: var(--mc-text-white);
+  font-size: 16px;
+  font-family: 'Minecraft', 'Courier New', monospace;
   cursor: pointer;
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23FFFFFF' d='M2 4h8L6 9z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
 }
 
 .control-group select:focus {
   outline: none;
-  border-color: #e94560;
+  border-color: var(--mc-diamond) var(--mc-emerald) var(--mc-emerald) var(--mc-diamond);
+}
+
+.control-group select:hover {
+  background: linear-gradient(180deg, var(--mc-wood-light) 0%, var(--mc-wood) 50%, var(--mc-wood-dark) 100%);
+}
+
+.control-group select option {
+  background: var(--mc-bg-dark);
+  color: var(--mc-text-white);
+  padding: 8px;
+}
+
+.mc-button {
+  padding: 8px 16px;
+  background: linear-gradient(180deg, 
+    var(--mc-stone-light) 0%, 
+    var(--mc-stone) 40%, 
+    var(--mc-stone-dark) 100%
+  );
+  border: 3px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  color: var(--mc-text-white);
+  cursor: pointer;
+  font-size: 16px;
+  font-family: 'Minecraft', 'Courier New', monospace;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8);
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3),
+    3px 3px 0 rgba(0, 0, 0, 0.5);
+  transition: all 0.1s ease;
+  position: relative;
+  letter-spacing: 0.5px;
+}
+
+.mc-button:hover {
+  background: linear-gradient(180deg, 
+    var(--mc-wood-light) 0%, 
+    var(--mc-wood) 40%, 
+    var(--mc-wood-dark) 100%
+  );
+  border-color: var(--mc-wood-light) var(--mc-wood-dark) var(--mc-wood-dark) var(--mc-wood-light);
+  color: var(--mc-text-yellow);
+}
+
+.mc-button:active {
+  transform: translate(2px, 2px);
+  box-shadow: 
+    inset -2px -2px 0 var(--mc-highlight),
+    inset 2px 2px 0 rgba(0, 0, 0, 0.3),
+    1px 1px 0 rgba(0, 0, 0, 0.5);
+}
+
+.mc-button-primary {
+  background: linear-gradient(180deg, 
+    var(--mc-grass-light) 0%, 
+    var(--mc-grass-green) 40%, 
+    var(--mc-grass-dark) 100%
+  );
+  border-color: var(--mc-grass-light) var(--mc-grass-dark) var(--mc-grass-dark) var(--mc-grass-light);
+}
+
+.mc-button-primary:hover {
+  background: linear-gradient(180deg, 
+    #9DD44F 0%, 
+    #7CB836 40%, 
+    #5A8A28 100%
+  );
+}
+
+.mc-button-danger {
+  background: linear-gradient(180deg, 
+    #C44 0%, 
+    #A33 40%, 
+    #822 100%
+  );
+  border-color: #D66 #822 #822 #D66;
+}
+
+.mc-button-danger:hover {
+  background: linear-gradient(180deg, 
+    #D55 0%, 
+    #B44 40%, 
+    #933 100%
+  );
 }
 
 .control-group button {
-  padding: 6px 14px;
-  background: #e94560;
-  border: none;
-  border-radius: 4px;
-  color: white;
+  padding: 8px 16px;
+  background: linear-gradient(180deg, 
+    var(--mc-stone-light) 0%, 
+    var(--mc-stone) 40%, 
+    var(--mc-stone-dark) 100%
+  );
+  border: 3px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  color: var(--mc-text-white);
   cursor: pointer;
-  font-size: 0.85em;
-  transition: background 0.2s;
+  font-size: 16px;
+  font-family: 'Minecraft', 'Courier New', monospace;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8);
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3),
+    3px 3px 0 rgba(0, 0, 0, 0.5);
+  transition: all 0.1s ease;
+  letter-spacing: 0.5px;
 }
 
 .control-group button:hover {
-  background: #ff6b6b;
+  background: linear-gradient(180deg, 
+    var(--mc-wood-light) 0%, 
+    var(--mc-wood) 40%, 
+    var(--mc-wood-dark) 100%
+  );
+  border-color: var(--mc-wood-light) var(--mc-wood-dark) var(--mc-wood-dark) var(--mc-wood-light);
+  color: var(--mc-text-yellow);
+}
+
+.control-group button:active {
+  transform: translate(2px, 2px);
+  box-shadow: 
+    inset -2px -2px 0 var(--mc-highlight),
+    inset 2px 2px 0 rgba(0, 0, 0, 0.3),
+    1px 1px 0 rgba(0, 0, 0, 0.5);
 }
 
 .btn-small {
-  padding: 4px 10px;
-  background: transparent;
-  border: 1px solid #e94560;
-  border-radius: 4px;
-  color: #e94560;
+  padding: 6px 12px;
+  background: linear-gradient(180deg, 
+    var(--mc-stone-light) 0%, 
+    var(--mc-stone) 40%, 
+    var(--mc-stone-dark) 100%
+  );
+  border: 2px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  color: var(--mc-text-gray);
   cursor: pointer;
-  font-size: 0.75em;
+  font-size: 14px;
+  font-family: 'Minecraft', 'Courier New', monospace;
   margin-top: 6px;
-  transition: all 0.2s;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  box-shadow: 
+    inset 1px 1px 0 var(--mc-highlight),
+    inset -1px -1px 0 rgba(0, 0, 0, 0.3),
+    2px 2px 0 rgba(0, 0, 0, 0.5);
+  transition: all 0.1s ease;
 }
 
 .btn-small:hover {
-  background: #e94560;
-  color: white;
+  background: linear-gradient(180deg, 
+    var(--mc-wood-light) 0%, 
+    var(--mc-wood) 40%, 
+    var(--mc-wood-dark) 100%
+  );
+  color: var(--mc-text-yellow);
 }
 
 .hint {
-  font-size: 0.75em;
-  color: #888;
+  font-size: 14px;
+  color: var(--mc-stone);
   margin-top: 4px;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
 }
 
 .cache-info {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 6px;
-  font-size: 0.85em;
-  color: #888;
+  margin-top: 8px;
+  font-size: 14px;
+  color: var(--mc-text-gray);
+  gap: 8px;
 }
 
 .cache-info span {
   flex: 1;
   text-align: center;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
 }
 
 .cache-info button {
-  padding: 4px 10px;
-  background: transparent;
-  border: 1px solid #666;
-  border-radius: 4px;
-  color: #888;
+  padding: 6px 12px;
+  background: linear-gradient(180deg, 
+    var(--mc-netherrack) 0%, 
+    #4A1E1E 100%
+  );
+  border: 2px solid;
+  border-color: #8A3A3A #3A1515 #3A1515 #8A3A3A;
+  color: var(--mc-text-red);
   cursor: pointer;
-  font-size: 0.85em;
-  transition: all 0.2s;
+  font-size: 14px;
+  font-family: 'Minecraft', 'Courier New', monospace;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  box-shadow: 
+    inset 1px 1px 0 rgba(255, 255, 255, 0.1),
+    inset -1px -1px 0 rgba(0, 0, 0, 0.3),
+    2px 2px 0 rgba(0, 0, 0, 0.5);
+  transition: all 0.1s ease;
 }
 
 .cache-info button:hover {
-  background: #444;
-  color: white;
+  background: linear-gradient(180deg, 
+    #AA4A4A 0%, 
+    #6A2A2A 100%
+  );
+  color: var(--mc-text-yellow);
 }
 
 .btn-select {
-  padding: 4px 8px;
-  background: transparent;
-  border: 1px solid #666;
-  border-radius: 4px;
-  color: #888;
+  padding: 6px 10px;
+  background: linear-gradient(180deg, 
+    var(--mc-stone-light) 0%, 
+    var(--mc-stone) 40%, 
+    var(--mc-stone-dark) 100%
+  );
+  border: 2px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  color: var(--mc-text-gray);
   cursor: pointer;
-  font-size: 0.75em;
-  transition: all 0.2s;
+  font-size: 14px;
+  font-family: 'Minecraft', 'Courier New', monospace;
   white-space: nowrap;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  box-shadow: 
+    inset 1px 1px 0 var(--mc-highlight),
+    inset -1px -1px 0 rgba(0, 0, 0, 0.3),
+    2px 2px 0 rgba(0, 0, 0, 0.5);
+  transition: all 0.1s ease;
 }
 
 .btn-select:hover {
-  background: #444;
-  color: white;
+  background: linear-gradient(180deg, 
+    var(--mc-wood-light) 0%, 
+    var(--mc-wood) 40%, 
+    var(--mc-wood-dark) 100%
+  );
+  color: var(--mc-text-yellow);
 }
 
 .btn-confirm {
   width: 100%;
-  margin-top: 6px;
-  padding: 6px 12px;
-  background: #333;
-  border: 1px solid #555;
-  border-radius: 4px;
-  color: #aaa;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: linear-gradient(180deg, 
+    var(--mc-wood-light) 0%, 
+    var(--mc-wood) 40%, 
+    var(--mc-wood-dark) 100%
+  );
+  border: 3px solid;
+  border-color: var(--mc-wood-light) var(--mc-wood-dark) var(--mc-wood-dark) var(--mc-wood-light);
+  color: var(--mc-text-white);
   cursor: pointer;
-  font-size: 0.85em;
-  transition: all 0.2s;
+  font-size: 16px;
+  font-family: 'Minecraft', 'Courier New', monospace;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8);
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3),
+    3px 3px 0 rgba(0, 0, 0, 0.5);
+  transition: all 0.1s ease;
 }
 
 .btn-confirm:hover {
-  background: #444;
-  color: white;
+  background: linear-gradient(180deg, 
+    #C8A570 0%, 
+    #B08040 40%, 
+    #7A5030 100%
+  );
+  color: var(--mc-text-yellow);
 }
 
 .coord-inputs {
   display: flex;
-  gap: 6px;
+  gap: 8px;
 }
 
 .coord-inputs input {
@@ -265,108 +568,216 @@ body {
 
 .control-group input[type="range"] {
   width: 100%;
-  margin-top: 2px;
+  margin-top: 4px;
   cursor: pointer;
 }
 
 input[type="range"] {
   -webkit-appearance: none;
-  background: #1a1a2e;
-  height: 6px;
-  border-radius: 3px;
+  appearance: none;
+  background: linear-gradient(180deg, 
+    var(--mc-stone-dark) 0%, 
+    var(--mc-bg-dark) 50%, 
+    var(--mc-stone-dark) 100%
+  );
+  height: 12px;
+  border: 2px solid;
+  border-color: var(--mc-stone-dark) var(--mc-stone-light) var(--mc-stone-light) var(--mc-stone-dark);
+  box-shadow: inset 2px 2px 4px rgba(0, 0, 0, 0.5);
 }
 
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  background: #e94560;
-  border-radius: 50%;
+  appearance: none;
+  width: 16px;
+  height: 20px;
+  background: linear-gradient(180deg, 
+    var(--mc-grass-light) 0%, 
+    var(--mc-grass-green) 50%, 
+    var(--mc-grass-dark) 100%
+  );
+  border: 2px solid;
+  border-color: var(--mc-grass-light) var(--mc-grass-dark) var(--mc-grass-dark) var(--mc-grass-light);
   cursor: pointer;
+  box-shadow: 
+    inset 1px 1px 0 var(--mc-highlight),
+    inset -1px -1px 0 rgba(0, 0, 0, 0.3),
+    2px 2px 0 rgba(0, 0, 0, 0.5);
 }
 
 input[type="range"]::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  background: #e94560;
-  border-radius: 50%;
+  width: 16px;
+  height: 20px;
+  background: linear-gradient(180deg, 
+    var(--mc-grass-light) 0%, 
+    var(--mc-grass-green) 50%, 
+    var(--mc-grass-dark) 100%
+  );
+  border: 2px solid;
+  border-color: var(--mc-grass-light) var(--mc-grass-dark) var(--mc-grass-dark) var(--mc-grass-light);
   cursor: pointer;
-  border: none;
+  box-shadow: 
+    inset 1px 1px 0 var(--mc-highlight),
+    inset -1px -1px 0 rgba(0, 0, 0, 0.3),
+    2px 2px 0 rgba(0, 0, 0, 0.5);
+  border-radius: 0;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  background: linear-gradient(180deg, 
+    #9DD44F 0%, 
+    #7CB836 50%, 
+    #5A8A28 100%
+  );
 }
 
 #map-container {
   flex: 1;
   position: relative;
   overflow: hidden;
-  background: #0a0a0a;
+  background: linear-gradient(180deg, 
+    #0A0A0A 0%, 
+    #151515 50%, 
+    #0A0A0A 100%
+  );
+  border: 4px solid var(--mc-obsidian);
+  box-shadow: 
+    inset 4px 4px 0 rgba(255, 255, 255, 0.05),
+    inset -4px -4px 0 rgba(0, 0, 0, 0.5);
 }
 
 #mapCanvas {
   position: absolute;
   top: 0;
   left: 0;
-  cursor: grab;
-}
-
-#mapCanvas:active {
-  cursor: grabbing;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 #loading {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 10px;
-  background: #0f3460;
-  border-radius: 4px;
-  font-size: 0.85em;
+  gap: 10px;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, 
+    var(--mc-stone) 0%, 
+    var(--mc-stone-dark) 100%
+  );
+  margin: 12px;
+  font-size: 16px;
+  border: 3px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3),
+    3px 3px 0 rgba(0, 0, 0, 0.5);
 }
 
 .spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid #e94560;
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
+  border: 3px solid var(--mc-stone-dark);
+  border-top-color: var(--mc-grass-green);
+  border-right-color: var(--mc-grass-light);
+  border-radius: 0;
+  animation: mc-spin 0.8s steps(8) infinite;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
+@keyframes mc-spin {
+  0% { transform: rotate(0deg); }
+  12.5% { transform: rotate(45deg); }
+  25% { transform: rotate(90deg); }
+  37.5% { transform: rotate(135deg); }
+  50% { transform: rotate(180deg); }
+  62.5% { transform: rotate(225deg); }
+  75% { transform: rotate(270deg); }
+  87.5% { transform: rotate(315deg); }
+  100% { transform: rotate(360deg); }
 }
 
 #stats {
-  padding: 10px;
-  background: #0f3460;
-  border-radius: 4px;
-  font-size: 0.8em;
-  color: #8aa;
-  line-height: 1.5;
+  padding: 12px;
+  background: linear-gradient(180deg, 
+    var(--mc-bg-panel) 0%, 
+    var(--mc-bg-dark) 100%
+  );
+  margin: 12px;
+  font-size: 14px;
+  color: var(--mc-text-gray);
+  line-height: 1.6;
+  border: 3px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3),
+    3px 3px 0 rgba(0, 0, 0, 0.5);
 }
 
 #stats::before {
   content: "统计";
   display: block;
-  color: #e94560;
-  font-weight: 600;
-  margin-bottom: 6px;
-  font-size: 0.9em;
+  color: var(--mc-text-yellow);
+  margin-bottom: 8px;
+  font-size: 16px;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--mc-dirt-brown);
+}
+
+#stats div {
+  padding: 2px 0;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
 }
 
 #toggleSidebar {
   display: none;
   position: fixed;
-  top: 10px;
-  left: 10px;
+  bottom: 12px;
+  left: 12px;
   z-index: 1000;
-  padding: 8px 12px;
-  background: #e94560;
-  border: none;
-  border-radius: 4px;
-  color: white;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, 
+    var(--mc-stone-light) 0%, 
+    var(--mc-stone) 40%, 
+    var(--mc-stone-dark) 100%
+  );
+  border: 3px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  color: var(--mc-text-white);
   cursor: pointer;
-  font-size: 1.2em;
+  font-size: 16px;
+  font-family: 'Minecraft', 'Courier New', monospace;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8);
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3),
+    4px 4px 0 rgba(0, 0, 0, 0.5);
+  transition: all 0.1s ease;
+}
+
+#toggleSidebar:hover {
+  background: linear-gradient(180deg, 
+    var(--mc-wood-light) 0%, 
+    var(--mc-wood) 40%, 
+    var(--mc-wood-dark) 100%
+  );
+  color: var(--mc-text-yellow);
+}
+
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 998;
+}
+
+.sidebar-overlay.open {
+  display: block;
 }
 
 @media (max-width: 768px) {
@@ -381,6 +792,7 @@ input[type="range"]::-moz-range-thumb {
     height: 100vh;
     z-index: 999;
     transform: translateX(-100%);
+    width: 280px;
   }
   
   #sidebar.open {
@@ -390,39 +802,212 @@ input[type="range"]::-moz-range-thumb {
   #map-container {
     width: 100vw;
   }
-  
-  .sidebar-overlay {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 998;
-  }
-  
-  .sidebar-overlay.open {
-    display: block;
-  }
 }
 
 @media (max-width: 480px) {
   #sidebar {
     width: 260px;
-    padding: 10px;
+    padding: 0;
   }
   
   #sidebar h2 {
-    font-size: 1em;
+    font-size: 18px;
+    padding: 12px 10px;
   }
   
   .section {
-    padding: 10px;
+    margin: 8px;
+  }
+  
+  .section-title {
+    font-size: 16px;
+    padding: 8px 10px;
+  }
+  
+  .control-group {
+    padding: 8px 10px;
   }
   
   .control-group button {
-    padding: 5px 10px;
-    font-size: 0.8em;
+    padding: 6px 12px;
+    font-size: 14px;
   }
+  
+  .control-group input[type="text"],
+  .control-group select {
+    padding: 6px 10px;
+    font-size: 14px;
+  }
+}
+
+.mc-panel {
+  background: linear-gradient(180deg, 
+    rgba(42, 42, 42, 0.95) 0%, 
+    rgba(26, 26, 26, 0.95) 100%
+  );
+  border: 4px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3),
+    4px 4px 0 rgba(0, 0, 0, 0.5);
+}
+
+.mc-inventory-slot {
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, 
+    #8B8B8B 0%, 
+    #373737 100%
+  );
+  border: 2px solid;
+  border-color: #373737 #FFFFFF #FFFFFF #373737;
+  box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.3);
+}
+
+.mc-hotbar {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: linear-gradient(180deg, 
+    #1A1A1A 0%, 
+    #0A0A0A 100%
+  );
+  border: 3px solid;
+  border-color: #373737 #FFFFFF #FFFFFF #373737;
+}
+
+.mc-hotbar-slot {
+  width: 28px;
+  height: 28px;
+  background: linear-gradient(135deg, 
+    #8B8B8B 0%, 
+    #373737 100%
+  );
+  border: 2px solid;
+  border-color: #373737 #555555 #555555 #373737;
+}
+
+.mc-hotbar-slot.selected {
+  border-color: #FFFFFF #373737 #373737 #FFFFFF;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.mc-tooltip {
+  position: absolute;
+  padding: 6px 8px;
+  background: linear-gradient(180deg, 
+    #100010 0%, 
+    #1A001A 100%
+  );
+  border: 2px solid;
+  border-color: #500080 #28003F #28003F #500080;
+  color: var(--mc-text-white);
+  font-size: 14px;
+  font-family: 'Minecraft', 'Courier New', monospace;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5);
+  z-index: 10000;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.mc-progress-bar {
+  width: 100%;
+  height: 16px;
+  background: var(--mc-bg-dark);
+  border: 2px solid;
+  border-color: var(--mc-stone-dark) var(--mc-stone-light) var(--mc-stone-light) var(--mc-stone-dark);
+  box-shadow: inset 2px 2px 4px rgba(0, 0, 0, 0.5);
+  position: relative;
+  overflow: hidden;
+}
+
+.mc-progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(180deg, 
+    var(--mc-grass-light) 0%, 
+    var(--mc-grass-green) 50%, 
+    var(--mc-grass-dark) 100%
+  );
+  transition: width 0.3s ease;
+}
+
+.mc-progress-bar-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 50%;
+  background: linear-gradient(180deg, 
+    rgba(255, 255, 255, 0.2) 0%, 
+    transparent 100%
+  );
+}
+
+.mc-diamond-border {
+  border: 3px solid var(--mc-diamond);
+  box-shadow: 
+    0 0 10px var(--mc-diamond),
+    inset 0 0 10px rgba(98, 237, 228, 0.2);
+}
+
+.mc-emerald-border {
+  border: 3px solid var(--mc-emerald);
+  box-shadow: 
+    0 0 10px var(--mc-emerald),
+    inset 0 0 10px rgba(42, 203, 88, 0.2);
+}
+
+.mc-gold-border {
+  border: 3px solid var(--mc-gold);
+  box-shadow: 
+    0 0 10px var(--mc-gold),
+    inset 0 0 10px rgba(246, 208, 62, 0.2);
+}
+
+.mc-nether-theme {
+  --mc-bg-dark: #1A0A0A;
+  --mc-bg-panel: #2A1515;
+  --mc-border-dark: #3A1515;
+  --mc-border-light: #8A3A3A;
+}
+
+.mc-end-theme {
+  --mc-bg-dark: #0A0A15;
+  --mc-bg-panel: #15152A;
+  --mc-border-dark: #1A1A3A;
+  --mc-border-light: #5A5A8A;
+}
+
+@keyframes mc-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+@keyframes mc-glow {
+  0%, 100% { box-shadow: 0 0 5px currentColor; }
+  50% { box-shadow: 0 0 15px currentColor, 0 0 25px currentColor; }
+}
+
+.mc-animate-pulse {
+  animation: mc-pulse 2s ease-in-out infinite;
+}
+
+.mc-animate-glow {
+  animation: mc-glow 2s ease-in-out infinite;
+}
+
+.mc-text-shadow {
+  text-shadow: 
+    2px 2px 0 rgba(0, 0, 0, 0.8),
+    -1px -1px 0 rgba(0, 0, 0, 0.8);
+}
+
+.mc-no-select {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }

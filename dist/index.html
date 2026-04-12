@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Xaero Map Viewer</title>
+  <title>Xaero Map Viewer - Minecraft Style</title>
   <link rel="stylesheet" href="/styles/main.css">
-  <script type="module" crossorigin src="/assets/index-Rc2IZcXf.js"></script>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%238B5A2B' x='10' y='10' width='80' height='80'/><rect fill='%2371A033' x='10' y='10' width='80' height='20'/><rect fill='%236B4423' x='10' y='70' width='80' height='20'/></svg>">
+  <script type="module" crossorigin src="/assets/index-CDS-QOV1.js"></script>
 </head>
 <body>
   <button id="toggleSidebar">☰</button>
@@ -21,7 +22,7 @@
         <div class="control-group">
           <label>服务端地址</label>
           <div class="input-row">
-            <input type="text" id="serverInput" placeholder="例如: localhost:3001 或 192.168.1.100:3001">
+            <input type="text" id="serverInput" placeholder="例如: localhost:3001">
             <button id="setServerBtn">连接</button>
           </div>
           <div class="hint" id="currentServer">当前: localhost:3001</div>
@@ -99,8 +100,8 @@
         <div class="control-group">
           <label>跳转坐标</label>
           <div class="coord-inputs">
-            <input type="text" id="targetX" placeholder="X">
-            <input type="text" id="targetZ" placeholder="Z">
+            <input type="text" id="targetX" placeholder="X" value="0">
+            <input type="text" id="targetZ" placeholder="Z" value="0">
             <button id="gotoCoords">跳转</button>
           </div>
         </div>

@@ -16,6 +16,9 @@ interface MapState {
   mapType: string | null;
   caveMode: number;
   caveStart: number;
+  scale: number;
+  centerX: number;
+  centerZ: number;
 }
 
 class XaeroMapViewer {
@@ -69,12 +72,16 @@ class XaeroMapViewer {
   }
   
   private saveMapState(): void {
+    const viewState = this.renderer.getViewState();
     const state: MapState = {
       world: this.currentWorld,
       dim: this.currentDim,
       mapType: this.currentMapType,
       caveMode: this.currentCaveMode,
-      caveStart: this.currentCaveStart
+      caveStart: this.currentCaveStart,
+      scale: viewState.scale,
+      centerX: viewState.centerX,
+      centerZ: viewState.centerZ
     };
     localStorage.setItem(STORAGE_KEY_MAP_STATE, JSON.stringify(state));
   }
@@ -488,6 +495,8 @@ class XaeroMapViewer {
     const selector = document.getElementById('dimSelector') as HTMLSelectElement;
     this.currentDim = selector.value;
     
+    this.renderer.setCurrentDimension(this.currentDim);
+    
     if (!this.currentWorld || !this.currentDim) return;
     
     this.saveMapState();
@@ -516,16 +525,16 @@ class XaeroMapViewer {
       this.currentCaveMode = savedCaveMode;
       const caveModeSelector = document.getElementById('caveModeSelector') as HTMLSelectElement;
       if (caveModeSelector) caveModeSelector.value = String(savedCaveMode);
-    } else if (isNether && this.currentCaveMode === 0) {
-      this.currentCaveMode = 2;
-      const caveModeSelector = document.getElementById('caveModeSelector') as HTMLSelectElement;
-      if (caveModeSelector) caveModeSelector.value = '2';
-    }
-    
-    if (!isNether && this.currentCaveMode > 0) {
-      this.currentCaveMode = 0;
-      const caveModeSelector = document.getElementById('caveModeSelector') as HTMLSelectElement;
-      if (caveModeSelector) caveModeSelector.value = '0';
+    } else {
+      if (isNether) {
+        this.currentCaveMode = 2;
+        const caveModeSelector = document.getElementById('caveModeSelector') as HTMLSelectElement;
+        if (caveModeSelector) caveModeSelector.value = '2';
+      } else {
+        this.currentCaveMode = 0;
+        const caveModeSelector = document.getElementById('caveModeSelector') as HTMLSelectElement;
+        if (caveModeSelector) caveModeSelector.value = '0';
+      }
     }
     
     if (savedCaveStart !== null && this.currentCaveMode === 1) {
@@ -648,7 +657,12 @@ class XaeroMapViewer {
       
       this.updateStatus(`发现 ${this.allRegions.length} 个区域文件`);
       
-      this.renderer.centerOn(0, 0);
+      if (this.savedMapState?.scale && this.savedMapState?.centerX !== undefined && this.savedMapState?.centerZ !== undefined) {
+        this.renderer.setViewState(this.savedMapState.scale, this.savedMapState.centerX, this.savedMapState.centerZ);
+        this.savedMapState = null;
+      } else {
+        this.renderer.centerOn(0, 0);
+      }
       
       this.loadVisibleRegions();
     } catch (e: unknown) {
@@ -663,6 +677,7 @@ class XaeroMapViewer {
 
   private onViewportChange(_bounds: ViewportBounds): void {
     this.loadVisibleRegions();
+    this.saveMapState();
   }
 
   private loadVisibleRegions(): void {
