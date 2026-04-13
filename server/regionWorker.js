@@ -163,7 +163,7 @@ function renderCaveLayersToPixels(layers, lod = 0) {
   const dstSize = srcSize >> lod;
   const pixels = Buffer.alloc(dstSize * dstSize * 4);
   
-  for (let i = 0; i < layers.length; i++) {
+  for (let i = layers.length - 1; i >= 0; i--) {
     const layerData = layers[i].data;
     const layerPixels = renderRegionToPixels(layerData, lod);
     
