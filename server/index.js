@@ -25,6 +25,7 @@ app.use(express.static(path.join(__dirname, '../dist')));
 let mapDirectory = '';
 let cacheDirectory = path.join(__dirname, 'cache');
 let db = null;
+let currentMapDbPath = '';
 
 const USER_CONFIG_FILE = path.join(__dirname, 'config.json');
 const SERVER_CONFIG_FILE = path.join(__dirname, 'server_config.json');
@@ -105,23 +106,142 @@ const MAX_CONCURRENT_LOADS = maxConcurrentLoads;
 const MAX_BATCH_REGIONS = maxBatchRegions;
 const pixelCache = new Map();
 const pixelCacheOrder = [];
+const pixelCacheIndex = new Map();
+const dbStatements = {};
+
+const NUM_WORKERS = Math.max(1, Math.min(cpus().length - 1, 4));
+const workers = [];
+const workerBusy = [];
+const taskQueue = [];
+const workerTaskId = new Map();
+const cancelledRequests = new Set();
+let taskIdCounter = 0;
+let requestIdCounter = 0;
+
+function initWorkerPool() {
+  for (let i = 0; i < NUM_WORKERS; i++) {
+    const worker = new Worker(path.join(__dirname, 'regionWorker.js'), {
+      workerData: { blockColors: BLOCK_COLORS, biomeColors: BIOME_COLORS }
+    });
+    
+    worker.on('message', ({ taskId, result, error }) => {
+      const task = workerTaskId.get(taskId);
+      if (task) {
+        workerTaskId.delete(taskId);
+        workerBusy[task.workerIndex] = false;
+        
+        if (!task.cancelled) {
+          if (error) {
+            task.reject(new Error(error));
+          } else {
+            task.resolve(result);
+          }
+        }
+        processNextTask();
+      }
+    });
+    
+    worker.on('error', (err) => {
+      console.error('Worker error:', err);
+    });
+    
+    workers.push(worker);
+    workerBusy.push(false);
+  }
+  
+  console.log(`Worker pool initialized with ${NUM_WORKERS} workers`);
+}
+
+function processNextTask() {
+  if (taskQueue.length === 0) return;
+  
+  const freeWorkerIndex = workerBusy.findIndex(busy => !busy);
+  if (freeWorkerIndex === -1) return;
+  
+  while (taskQueue.length > 0) {
+    taskQueue.sort((a, b) => b.priority - a.priority);
+    
+    const task = taskQueue.shift();
+    
+    if (cancelledRequests.has(task.requestId)) {
+      task.resolve(null);
+      continue;
+    }
+    
+    workerBusy[freeWorkerIndex] = true;
+    
+    workerTaskId.set(task.taskId, { 
+      resolve: task.resolve, 
+      reject: task.reject, 
+      workerIndex: freeWorkerIndex,
+      requestId: task.requestId,
+      cancelled: false
+    });
+    
+    workers[freeWorkerIndex].postMessage({
+      taskId: task.taskId,
+      dimPath: task.dimPath,
+      regionX: task.regionX,
+      regionZ: task.regionZ,
+      caveMode: task.caveMode,
+      caveStart: task.caveStart,
+      lod: task.lod
+    });
+    break;
+  }
+}
+
+function cancelRequest(requestId) {
+  cancelledRequests.add(requestId);
+  
+  for (let i = taskQueue.length - 1; i >= 0; i--) {
+    if (taskQueue[i].requestId === requestId) {
+      taskQueue[i].resolve(null);
+      taskQueue.splice(i, 1);
+    }
+  }
+  
+  for (const [taskId, task] of workerTaskId.entries()) {
+    if (task.requestId === requestId) {
+      task.cancelled = true;
+    }
+  }
+}
+
+function runWorkerTask(dimPath, regionX, regionZ, caveMode, caveStart, lod, priority = 0, requestId = null) {
+  return new Promise((resolve, reject) => {
+    const taskId = taskIdCounter++;
+    
+    taskQueue.push({
+      taskId,
+      requestId,
+      dimPath,
+      regionX,
+      regionZ,
+      caveMode,
+      caveStart,
+      lod,
+      priority,
+      resolve,
+      reject
+    });
+    
+    processNextTask();
+  });
+}
 
 function pruneMemoryCache() {
   while (pixelCacheOrder.length > MAX_MEMORY_CACHE_ENTRIES) {
     const oldestKey = pixelCacheOrder.shift();
     pixelCache.delete(oldestKey);
-  }
-  if (global.gc && pixelCacheOrder.length > MAX_MEMORY_CACHE_ENTRIES / 2) {
-    global.gc();
+    pixelCacheIndex.delete(oldestKey);
   }
 }
 
 function clearMemoryCache() {
   pixelCache.clear();
   pixelCacheOrder.length = 0;
-  if (global.gc) {
-    global.gc();
-  }
+  pixelCacheIndex.clear();
 }
 
 async function ensureCacheDir() {
@@ -130,14 +250,34 @@ async function ensureCacheDir() {
   }
 }
 
-function initDatabase() {
-  const dbPath = path.join(cacheDirectory, 'cache.db');
+function getDbNameForDirectory(dirPath) {
+  if (!dirPath) return 'default';
+  const normalized = path.resolve(dirPath).replace(/[\\/:*?"<>|]/g, '_');
+  const hash = normalized.split('').reduce((acc, char) => ((acc << 5) - acc + char.charCodeAt(0)) | 0, 0);
+  return `${Math.abs(hash).toString(16)}_${path.basename(dirPath).substring(0, 32)}`;
+}
+
+function initDatabase(forMapDirectory = null) {
+  if (db) {
+    try {
+      db.close();
+    } catch {}
+    db = null;
+  }
+  
+  clearMemoryCache();
+  
+  const dbName = getDbNameForDirectory(forMapDirectory);
+  const dbPath = path.join(cacheDirectory, `${dbName}.db`);
+  currentMapDbPath = dbPath;
+  
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = OFF');
-  db.pragma('cache_size = -128000');
+  db.pragma('cache_size = -256000');
   db.pragma('temp_store = MEMORY');
-  db.pragma('mmap_size = 268435456');
+  db.pragma('mmap_size = 536870912');
+  db.pragma('locking_mode = EXCLUSIVE');
   
   db.exec(`
     CREATE TABLE IF NOT EXISTS region_cache (
@@ -151,6 +291,10 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_cache_key ON region_cache(cache_key);
   `);
   
+  dbStatements.read = db.prepare('SELECT data, compressed FROM region_cache WHERE cache_key = ?');
+  dbStatements.write = db.prepare('INSERT OR REPLACE INTO region_cache (cache_key, data, compressed) VALUES (?, ?, 1)');
+  dbStatements.delete = db.prepare('DELETE FROM region_cache WHERE cache_key = ?');
+  
   console.log(`Database initialized: ${dbPath}`);
 }
 
@@ -163,7 +307,7 @@ function decompressData(data) {
 }
 
 function getCacheKey(dimPath, regionX, regionZ, yHeight = null, lod = 0) {
-  const relativePath = path.relative(mapDirectory, dimPath);
+  const relativePath = mapDirectory ? path.relative(mapDirectory, dimPath) : dimPath;
   const heightSuffix = yHeight !== null ? `_y${yHeight}` : '';
   const lodSuffix = lod > 0 ? `_lod${lod}` : '';
   return `${relativePath}/${regionX}_${regionZ}${heightSuffix}${lodSuffix}`;
@@ -173,27 +317,43 @@ async function readPixelCache(dimPath, regionX, regionZ, yHeight = null, lod = 0
   const key = getCacheKey(dimPath, regionX, regionZ, yHeight, lod);
   
   if (pixelCache.has(key)) {
-    const idx = pixelCacheOrder.indexOf(key);
-    if (idx !== -1) {
-      pixelCacheOrder.splice(idx, 1);
+    const cached = pixelCache.get(key);
+    if (cached && cached.length > 0) {
+      const idx = pixelCacheIndex.get(key);
+      if (idx !== undefined && idx < pixelCacheOrder.length && pixelCacheOrder[idx] === key) {
+        pixelCacheOrder[idx] = null;
+      }
       pixelCacheOrder.push(key);
+      pixelCacheIndex.set(key, pixelCacheOrder.length - 1);
+      return cached;
     }
-    return pixelCache.get(key);
+    pixelCache.delete(key);
+    pixelCacheIndex.delete(key);
   }
   
-  if (db) {
+  if (db && dbStatements.read) {
     try {
-      const row = db.prepare('SELECT data, compressed FROM region_cache WHERE cache_key = ?').get(key);
-      if (row) {
+      const row = dbStatements.read.get(key);
+      if (row && row.data && row.data.length > 0) {
         const data = row.compressed ? decompressData(row.data) : row.data;
+        if (!data || data.length === 0) {
+          dbStatements.delete.run(key);
+          return null;
+        }
         pixelCache.set(key, data);
         pixelCacheOrder.push(key);
+        pixelCacheIndex.set(key, pixelCacheOrder.length - 1);
         pruneMemoryCache();
         
         return data;
+      } else if (row) {
+        dbStatements.delete.run(key);
       }
     } catch (e) {
       console.error('Database read error:', e.message);
+      try {
+        dbStatements.delete.run(key);
+      } catch {}
     }
   }
   
@@ -201,16 +361,18 @@ async function readPixelCache(dimPath, regionX, regionZ, yHeight = null, lod = 0
 }
 
 async function writePixelCache(dimPath, regionX, regionZ, pixels, yHeight = null, lod = 0) {
+  if (!pixels || pixels.length === 0) return;
+  
   const key = getCacheKey(dimPath, regionX, regionZ, yHeight, lod);
   pixelCache.set(key, pixels);
   pixelCacheOrder.push(key);
+  pixelCacheIndex.set(key, pixelCacheOrder.length - 1);
   pruneMemoryCache();
   
-  if (db) {
+  if (db && dbStatements.write) {
     try {
       const compressed = compressData(pixels);
-      const insertStmt = db.prepare('INSERT OR REPLACE INTO region_cache (cache_key, data, compressed) VALUES (?, ?, 1)');
-      insertStmt.run(key, compressed);
+      dbStatements.write.run(key, compressed);
     } catch (e) {
       console.error('Database write error:', e.message);
     }
@@ -238,85 +400,21 @@ function downsamplePixels(pixels, srcSize, dstSize) {
   return result;
 }
 
-async function loadRegionPixels(dimPath, regionX, regionZ, caveMode = null, caveStart = null, lod = 0) {
+async function loadRegionPixels(dimPath, regionX, regionZ, caveMode = null, caveStart = null, lod = 0, priority = 0, requestId = null) {
   const cacheKey = caveMode !== null ? `cave_${caveMode}_${caveStart || 'auto'}` : null;
   
   const cached = await readPixelCache(dimPath, regionX, regionZ, cacheKey, lod);
   if (cached) return cached;
   
-  if (lod > 0) {
-    const fullResCached = await readPixelCache(dimPath, regionX, regionZ, cacheKey, 0);
-    if (fullResCached) {
-      const lodSize = 512 >> lod;
-      const downsampled = downsamplePixels(fullResCached, 512, lodSize);
-      await writePixelCache(dimPath, regionX, regionZ, downsampled, cacheKey, lod);
-      return downsampled;
-    }
+  if (workers.length > 0) {
+    const pixels = await runWorkerTask(dimPath, regionX, regionZ, caveMode, caveStart, lod, priority, requestId);
+    if (!pixels) return null;
+    const pixelBuffer = Buffer.isBuffer(pixels) ? pixels : Buffer.from(pixels);
+    await writePixelCache(dimPath, regionX, regionZ, pixelBuffer, cacheKey, lod);
+    return pixelBuffer;
   }
   
-  let pixels;
-  if (caveMode === 0 || caveMode === null) {
-    const regionData = await loadRegion(dimPath, regionX, regionZ);
-    if (!regionData) return null;
-    pixels = renderRegionToPixels(regionData);
-  } else if (caveMode === 1) {
-    const maxLayer = caveStart !== null ? Math.floor(caveStart / 16) : 7;
-    const layers = [];
-    
-    for (let layer = 0; layer <= maxLayer; layer++) {
-      const cavePath = path.join(dimPath, 'caves', String(layer));
-      if (existsSync(cavePath)) {
-        const regionData = await loadRegion(cavePath, regionX, regionZ);
-        if (regionData) {
-          layers.push({ layer, data: regionData });
-        }
-      }
-    }
-    
-    if (layers.length === 0) {
-      const regionData = await loadRegion(dimPath, regionX, regionZ);
-      if (!regionData) return null;
-      pixels = renderRegionToPixels(regionData);
-    } else {
-      pixels = renderCaveLayersToPixels(layers);
-    }
-  } else if (caveMode === 2) {
-    const layers = [];
-    const maxLayer = 15;
-    
-    for (let layer = 0; layer <= maxLayer; layer++) {
-      const cavePath = path.join(dimPath, 'caves', String(layer));
-      if (existsSync(cavePath)) {
-        const regionData = await loadRegion(cavePath, regionX, regionZ);
-        if (regionData) {
-          layers.push({ layer, data: regionData });
-        }
-      }
-    }
-    
-    if (layers.length === 0) {
-      const regionData = await loadRegion(dimPath, regionX, regionZ);
-      if (!regionData) return null;
-      pixels = renderRegionToPixels(regionData);
-    } else {
-      pixels = renderCaveLayersToPixels(layers);
-    }
-  } else {
-    const regionData = await loadRegion(dimPath, regionX, regionZ);
-    if (!regionData) return null;
-    pixels = renderRegionToPixels(regionData);
-  }
-  
-  await writePixelCache(dimPath, regionX, regionZ, pixels, cacheKey, 0);
-  
-  if (lod > 0) {
-    const lodSize = 512 >> lod;
-    const downsampled = downsamplePixels(pixels, 512, lodSize);
-    await writePixelCache(dimPath, regionX, regionZ, downsampled, cacheKey, lod);
-    return downsampled;
-  }
-  
-  return pixels;
+  return null;
 }
 
 function renderCaveLayersToPixels(layers) {
@@ -952,6 +1050,7 @@ app.post('/api/set-directory', async (req, res) => {
   }
   
   mapDirectory = directory;
+  initDatabase(directory);
   saveUserConfig();
   res.json({ success: true, directory });
 });
@@ -969,13 +1068,8 @@ app.post('/api/set-cache-directory', async (req, res) => {
     }
     
     cacheDirectory = directory;
-    pixelCache.clear();
-    pixelCacheOrder.length = 0;
     
-    if (db) {
-      db.close();
-    }
-    initDatabase();
+    initDatabase(mapDirectory);
     
     saveUserConfig();
     
@@ -1117,24 +1211,39 @@ app.get('/api/region-pixels', async (req, res) => {
       return res.status(404).json({ error: '区域不存在' });
     }
     
+    const pixelBuffer = Buffer.isBuffer(pixels) ? pixels : Buffer.from(pixels);
+    
     res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Length', pixels.length);
-    res.send(pixels);
+    res.setHeader('Content-Length', pixelBuffer.length);
+    res.send(pixelBuffer);
   } catch (error) {
     console.error('Error loading region pixels:', error);
     res.status(500).json({ error: String(error) });
   }
 });
 
+app.post('/api/cancel-request/:requestId', (req, res) => {
+  const requestId = parseInt(req.params.requestId);
+  if (!isNaN(requestId)) {
+    cancelRequest(requestId);
+  }
+  res.json({ success: true });
+});
+
 app.get('/api/batch-regions', async (req, res) => {
-  const { world, dim, coords, mapType, caveMode, caveStart, lod, viewStartX, viewStartZ, viewEndX, viewEndZ } = req.query;
+  const { requestId: clientRequestId, world, dim, coords, mapType, caveMode, caveStart, lod, viewStartX, viewStartZ, viewEndX, viewEndZ } = req.query;
   
   if (!dim || !coords) {
     return res.status(400).json({ error: '缺少参数' });
   }
   
+  const requestId = clientRequestId !== undefined ? parseInt(String(clientRequestId)) : requestIdCounter++;
   let isCancelled = false;
-  const cancelHandler = () => { isCancelled = true; };
+  
+  const cancelHandler = () => {
+    isCancelled = true;
+    cancelRequest(requestId);
+  };
   req.on('close', cancelHandler);
   
   try {
@@ -1172,6 +1281,7 @@ app.get('/api/batch-regions', async (req, res) => {
     const totalRegions = filteredPairs.length;
     if (totalRegions === 0) {
       req.off('close', cancelHandler);
+      cancelledRequests.delete(requestId);
       const emptyBuffer = Buffer.alloc(8);
       emptyBuffer.writeUInt32LE(0, 0);
       emptyBuffer.writeUInt32LE(lodValue, 4);
@@ -1183,24 +1293,32 @@ app.get('/api/batch-regions', async (req, res) => {
     const lodSize = 512 >> lodValue;
     const REGION_PIXEL_SIZE = lodSize * lodSize * 4;
     
-    const results = [];
-    for (let i = 0; i < totalRegions && !isCancelled; i += MAX_CONCURRENT_LOADS) {
-      const batch = filteredPairs.slice(i, i + MAX_CONCURRENT_LOADS);
-      const batchResults = await Promise.all(
-        batch.map(coord => loadRegionPixels(dimPath, coord.x, coord.z, caveModeValue, caveStartValue, lodValue))
-      );
-      results.push(...batchResults);
-      pruneMemoryCache();
-    }
+    const centerX = hasViewport ? (vx0 + vx1) / 2 : 0;
+    const centerZ = hasViewport ? (vz0 + vz1) / 2 : 0;
+    const maxDist = hasViewport ? Math.max(vx1 - vx0, vz1 - vz0) / 2 : 1;
+    
+    const results = await Promise.all(
+      filteredPairs.map(coord => {
+        const dist = hasViewport 
+          ? Math.sqrt(Math.pow(coord.x - centerX, 2) + Math.pow(coord.z - centerZ, 2))
+          : 0;
+        const priority = Math.max(0, 1000 - Math.floor(dist / maxDist * 1000));
+        return loadRegionPixels(dimPath, coord.x, coord.z, caveModeValue, caveStartValue, lodValue, priority, requestId);
+      })
+    );
     
     if (isCancelled) {
       req.off('close', cancelHandler);
+      cancelledRequests.delete(requestId);
       return;
     }
     
+    cancelledRequests.delete(requestId);
+    pruneMemoryCache();
+    
     let totalSize = 4 + 4;
     for (let i = 0; i < totalRegions; i++) {
-      totalSize += 12 + (results[i] ? results[i].length : REGION_PIXEL_SIZE);
+      totalSize += 12 + (results[i] ? results[i].length : 0);
     }
     
     const buffer = Buffer.alloc(totalSize);
@@ -1216,13 +1334,13 @@ app.get('/api/batch-regions', async (req, res) => {
       buffer.writeInt32LE(filteredPairs[i].z, offset + 4);
       
       if (results[i]) {
-        buffer.writeUInt32LE(results[i].length, offset + 8);
-        results[i].copy(buffer, offset + 12);
-        offset += 12 + results[i].length;
+        const resultBuffer = Buffer.isBuffer(results[i]) ? results[i] : Buffer.from(results[i]);
+        buffer.writeUInt32LE(resultBuffer.length, offset + 8);
+        resultBuffer.copy(buffer, offset + 12);
+        offset += 12 + resultBuffer.length;
       } else {
-        buffer.writeUInt32LE(REGION_PIXEL_SIZE, offset + 8);
-        buffer.fill(0, offset + 12, offset + 12 + REGION_PIXEL_SIZE);
-        offset += 12 + REGION_PIXEL_SIZE;
+        buffer.writeUInt32LE(0, offset + 8);
+        offset += 12;
       }
     }
     
@@ -1754,9 +1872,10 @@ function readTagValue(data, view, offset, type) {
 
 app.listen(PORT, async () => {
   await ensureCacheDir();
-  initDatabase();
+  initDatabase(mapDirectory || null);
+  initWorkerPool();
   console.log(`Xaero Map Server running at http://localhost:${PORT}`);
-  console.log(`Default directory: ${mapDirectory}`);
-  console.log(`Cache database: ${path.join(cacheDirectory, 'cache.db')}`);
+  console.log(`Default directory: ${mapDirectory || '(not set)'}`);
+  console.log(`Cache database: ${currentMapDbPath}`);
   console.log(`Config: maxCacheEntries=${MAX_MEMORY_CACHE_ENTRIES}, maxConcurrentLoads=${MAX_CONCURRENT_LOADS}, maxBatchRegions=${MAX_BATCH_REGIONS}`);
 });

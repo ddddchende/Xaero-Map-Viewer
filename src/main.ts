@@ -6,7 +6,7 @@ const STORAGE_KEY_SERVER = 'xaero_map_server';
 const STORAGE_KEY_MAP_STATE = 'xaero_map_state';
 const STORAGE_KEY_SECTIONS = 'xaero_map_sections';
 const STORAGE_KEY_CONCURRENT = 'xaero_map_concurrent';
-const DEFAULT_CONCURRENT_LOADS = 64;
+const DEFAULT_CONCURRENT_LOADS = 256;
 
 let API_BASE = `http://${DEFAULT_SERVER}/api`;
 
@@ -40,6 +40,7 @@ class XaeroMapViewer {
   private cacheSizeTimeout: ReturnType<typeof setTimeout> | null = null;
   private viewportChangeTimeout: ReturnType<typeof setTimeout> | null = null;
   private lastViewportBounds: ViewportBounds | null = null;
+  private currentRequestId: number = 0;
 
   constructor() {
     this.loadServerConfig();
@@ -96,7 +97,7 @@ class XaeroMapViewer {
       const saved = localStorage.getItem(STORAGE_KEY_CONCURRENT);
       if (saved) {
         const value = parseInt(saved, 10);
-        if (!isNaN(value) && value >= 16 && value <= 256) {
+        if (!isNaN(value) && value >= 16 && value <= 512) {
           this.concurrentLoads = value;
         }
       }
@@ -229,43 +230,9 @@ class XaeroMapViewer {
     const setCacheDirBtn = document.getElementById('setCacheDirBtn') as HTMLButtonElement;
     const cacheDirInput = document.getElementById('cacheDirInput') as HTMLInputElement;
     const clearCacheBtn = document.getElementById('clearCacheBtn') as HTMLButtonElement;
-    const selectDirBtn = document.getElementById('selectDirBtn') as HTMLButtonElement;
-    const selectCacheDirBtn = document.getElementById('selectCacheDirBtn') as HTMLButtonElement;
     
     setCacheDirBtn?.addEventListener('click', () => this.setCacheDirectory(cacheDirInput.value));
     clearCacheBtn?.addEventListener('click', () => this.clearCache());
-    
-    selectDirBtn?.addEventListener('click', async () => {
-      if ((window as unknown as { showDirectoryPicker?: () => Promise<{ name: string }> }).showDirectoryPicker) {
-        try {
-          const dirHandle = await (window as unknown as { showDirectoryPicker?: () => Promise<{ name: string }> }).showDirectoryPicker?.();
-          if (dirHandle) {
-            dirInput.value = dirHandle.name;
-          }
-        } catch {}
-      } else {
-        const path = prompt('请输入地图目录路径:', dirInput.value || '');
-        if (path !== null && path.trim()) {
-          dirInput.value = path.trim();
-        }
-      }
-    });
-    
-    selectCacheDirBtn?.addEventListener('click', async () => {
-      if ((window as unknown as { showDirectoryPicker?: () => Promise<{ name: string }> }).showDirectoryPicker) {
-        try {
-          const dirHandle = await (window as unknown as { showDirectoryPicker?: () => Promise<{ name: string }> }).showDirectoryPicker?.();
-          if (dirHandle) {
-            cacheDirInput.value = dirHandle.name;
-          }
-        } catch {}
-      } else {
-        const path = prompt('请输入缓存目录路径:', cacheDirInput.value || '');
-        if (path !== null && path.trim()) {
-          cacheDirInput.value = path.trim();
-        }
-      }
-    });
     
     const concurrentSlider = document.getElementById('concurrentSlider') as HTMLInputElement;
     const concurrentValue = document.getElementById('concurrentValue');
@@ -456,6 +423,24 @@ class XaeroMapViewer {
     if (this.isLoading) return;
     this.isLoading = true;
     
+    this.cancelServerRequest();
+    
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+    this.abortController = new AbortController();
+    
+    this.currentWorld = null;
+    this.currentDim = null;
+    this.currentMapType = null;
+    this.allRegions = [];
+    this.allRegionSet.clear();
+    this.loadingRegions.clear();
+    this.regionAccessTime.clear();
+    this.mapTypes = [];
+    
+    this.renderer.clearAllRegions();
+    
     this.showLoading(true);
     this.updateStatus('正在设置目录...');
     
@@ -531,6 +516,11 @@ class XaeroMapViewer {
   }
 
   private async handleWorldChange(autoSelect: boolean = false): Promise<void> {
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+    this.abortController = new AbortController();
+    
     const selector = document.getElementById('worldSelector') as HTMLSelectElement;
     this.currentWorld = selector.value;
     
@@ -539,8 +529,10 @@ class XaeroMapViewer {
     this.saveMapState();
     this.updateStatus('正在加载维度...');
     
+    const signal = this.abortController?.signal;
+    
     try {
-      const response = await fetch(`${API_BASE}/worlds/${encodeURIComponent(this.currentWorld)}/dimensions`);
+      const response = await fetch(`${API_BASE}/worlds/${encodeURIComponent(this.currentWorld)}/dimensions`, { signal });
       const dimensions: {name: string, path: string}[] = await response.json();
       
       const dimSelector = document.getElementById('dimSelector') as HTMLSelectElement;
@@ -572,23 +564,28 @@ class XaeroMapViewer {
       
       if (savedDimExists) {
         dimSelector.value = savedDim!;
-        await this.handleDimChange(true);
+        await this.handleDimChange();
       } else if (autoSelect || dimensions.length === 1) {
         const overworld = dimensions.find(d => d.path === 'null' || d.name.includes('主世界') || d.name === 'Overworld');
         const toSelect = overworld || dimensions[0];
         dimSelector.value = toSelect.path;
-        await this.handleDimChange(true);
+        await this.handleDimChange();
       }
-    } catch (e) {
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === 'AbortError') {
+        return;
+      }
       console.error('Failed to load dimensions:', e);
     }
   }
 
-  private async handleDimChange(autoSelect: boolean = false): Promise<void> {
+  private async handleDimChange(): Promise<void> {
     if (this.abortController) {
       this.abortController.abort();
     }
     this.abortController = new AbortController();
+    
+    this.currentRequestId++;
     
     const selector = document.getElementById('dimSelector') as HTMLSelectElement;
     this.currentDim = selector.value;
@@ -599,7 +596,7 @@ class XaeroMapViewer {
     
     this.saveMapState();
     
-    this.renderer.clearRegions();
+    this.renderer.clearAllRegions();
     this.allRegions = [];
     this.allRegionSet.clear();
     this.loadingRegions.clear();
@@ -684,13 +681,16 @@ class XaeroMapViewer {
         mapTypeSelector.value = savedMapType!;
         this.currentMapType = savedMapType;
         await this.loadRegionList();
-      } else if (autoSelect || this.mapTypes.length === 1) {
-        const defaultMap = this.mapTypes.find(m => m.path.includes('default') || m.name === '默认') || this.mapTypes[0];
+      } else if (this.mapTypes.length === 1) {
+        const defaultMap = this.mapTypes[0];
         mapTypeSelector.value = defaultMap.path;
         this.currentMapType = defaultMap.path;
         await this.loadRegionList();
       } else {
-        this.updateStatus(`找到 ${this.mapTypes.length} 个地图类型`);
+        const defaultMap = this.mapTypes.find(m => m.path.includes('default') || m.name === '默认') || this.mapTypes[0];
+        mapTypeSelector.value = defaultMap.path;
+        this.currentMapType = defaultMap.path;
+        await this.loadRegionList();
       }
     } catch (e: unknown) {
       if (e instanceof Error && e.name === 'AbortError') {
@@ -717,8 +717,6 @@ class XaeroMapViewer {
     
     this.showLoading(true);
     this.renderer.clearRegions();
-    this.allRegions = [];
-    this.allRegionSet.clear();
     this.loadingRegions.clear();
     this.regionAccessTime.clear();
     
@@ -779,6 +777,7 @@ class XaeroMapViewer {
     const shouldCancelRequest = this.shouldCancelPendingRequests(bounds);
     
     if (shouldCancelRequest) {
+      this.cancelServerRequest();
       if (this.abortController) {
         this.abortController.abort();
       }
@@ -799,6 +798,14 @@ class XaeroMapViewer {
     }, 50);
   }
 
+  private async cancelServerRequest(): Promise<void> {
+    if (this.currentRequestId > 0) {
+      try {
+        await fetch(`${API_BASE}/cancel-request/${this.currentRequestId}`, { method: 'POST' });
+      } catch {}
+    }
+  }
+
   private shouldCancelPendingRequests(newBounds: ViewportBounds): boolean {
     if (!this.lastViewportBounds) return false;
     if (this.loadingRegions.size === 0) return false;
@@ -806,12 +813,14 @@ class XaeroMapViewer {
     const oldBounds = this.lastViewportBounds;
     const dx = Math.abs(newBounds.startX - oldBounds.startX);
     const dz = Math.abs(newBounds.startZ - oldBounds.startZ);
-    const threshold = 2;
+    const threshold = 1;
     
     return dx > threshold || dz > threshold;
   }
 
   private onLodChange(): void {
+    this.cancelServerRequest();
+    
     if (this.abortController) {
       this.abortController.abort();
     }
@@ -866,6 +875,34 @@ class XaeroMapViewer {
     this.renderer.setPendingRegions(new Set(this.loadingRegions));
   }
 
+  private processRegionsBatch(regions: { rx: number; rz: number; pixelData: Uint8Array }[], lod: number, requestId: number): void {
+    const BATCH_SIZE = 4;
+    let index = 0;
+    
+    const processNext = () => {
+      if (requestId !== this.currentRequestId) return;
+      
+      const end = Math.min(index + BATCH_SIZE, regions.length);
+      
+      for (; index < end; index++) {
+        const { rx, rz, pixelData } = regions[index];
+        this.renderer.addRegionPixels(rx, rz, pixelData, lod);
+        this.regionAccessTime.set(`${rx},${rz}`, Date.now());
+      }
+      
+      this.renderer.render();
+      
+      if (index < regions.length) {
+        requestAnimationFrame(processNext);
+      } else {
+        this.updateStats();
+        this.loadCacheSize();
+      }
+    };
+    
+    processNext();
+  }
+
   private async loadRegionsBatch(regions: {x: number, z: number}[]): Promise<void> {
     if (regions.length === 0) return;
     
@@ -896,11 +933,14 @@ class XaeroMapViewer {
     }
     this.updatePendingRegions();
     
+    this.currentRequestId++;
+    const requestId = this.currentRequestId;
+    
     try {
       const coordsStr = toLoad.map(r => `${r.x},${r.z}`).join(';');
       const currentLod = this.renderer.getCurrentLodLevel();
       const bounds = this.renderer.getViewportBounds();
-      let url = `${API_BASE}/batch-regions?world=${encodeURIComponent(this.currentWorld!)}&dim=${encodeURIComponent(this.currentDim!)}&coords=${encodeURIComponent(coordsStr)}&lod=${currentLod}&viewStartX=${bounds.startX}&viewStartZ=${bounds.startZ}&viewEndX=${bounds.endX}&viewEndZ=${bounds.endZ}`;
+      let url = `${API_BASE}/batch-regions?requestId=${requestId}&world=${encodeURIComponent(this.currentWorld!)}&dim=${encodeURIComponent(this.currentDim!)}&coords=${encodeURIComponent(coordsStr)}&lod=${currentLod}&viewStartX=${bounds.startX}&viewStartZ=${bounds.startZ}&viewEndX=${bounds.endX}&viewEndZ=${bounds.endZ}`;
       if (this.currentMapType) {
         url += `&mapType=${encodeURIComponent(this.currentMapType)}`;
       }
@@ -926,6 +966,8 @@ class XaeroMapViewer {
       const lodValue = view.getUint32(4, true);
       let offset = 8;
       
+      const regions: { rx: number; rz: number; pixelData: Uint8Array }[] = [];
+      
       for (let i = 0; i < totalRegions; i++) {
         const rx = view.getInt32(offset, true);
         const rz = view.getInt32(offset + 4, true);
@@ -933,18 +975,18 @@ class XaeroMapViewer {
         offset += 12;
         
         if (pixelSize > 0) {
-          const pixelData = new Uint8Array(buffer, offset, pixelSize);
-          this.renderer.addRegionPixels(rx, rz, pixelData, lodValue);
-          const key = `${rx},${rz}`;
-          this.regionAccessTime.set(key, Date.now());
+          const pixelData = new Uint8Array(buffer.slice(offset, offset + pixelSize));
+          regions.push({ rx, rz, pixelData });
         }
         
         offset += pixelSize;
       }
       
-      this.renderer.render();
-      this.updateStats();
-      this.loadCacheSize();
+      if (requestId !== this.currentRequestId) {
+        return;
+      }
+      
+      this.processRegionsBatch(regions, lodValue, requestId);
     } catch (e: unknown) {
       if (e instanceof Error && e.name === 'AbortError') {
         return;

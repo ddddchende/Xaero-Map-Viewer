@@ -6,7 +6,7 @@
   <title>Xaero Map Viewer - Minecraft Style</title>
   <link rel="stylesheet" href="/styles/main.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%238B5A2B' x='10' y='10' width='80' height='80'/><rect fill='%2371A033' x='10' y='10' width='80' height='20'/><rect fill='%236B4423' x='10' y='70' width='80' height='20'/></svg>">
-  <script type="module" crossorigin src="/assets/index-CEco-3sq.js"></script>
+  <script type="module" crossorigin src="/assets/index-CAGk7sQ1.js"></script>
 </head>
 <body>
   <button id="toggleSidebar">☰</button>
@@ -42,19 +42,13 @@
         <div class="section-content">
           <div class="control-group">
             <label>地图目录</label>
-            <div class="input-row">
-              <input type="text" id="dirInput" placeholder="输入地图目录路径">
-              <button id="selectDirBtn" class="btn-select">选择</button>
-            </div>
-            <button id="setDirBtn" class="btn-confirm">确认更改目录</button>
+            <input type="text" id="dirInput" placeholder="输入地图目录路径">
+            <button id="setDirBtn" class="btn-confirm">确认</button>
           </div>
           <div class="control-group">
             <label>缓存目录</label>
-            <div class="input-row">
-              <input type="text" id="cacheDirInput" placeholder="默认: server/cache">
-              <button id="selectCacheDirBtn" class="btn-select">选择</button>
-            </div>
-            <button id="setCacheDirBtn" class="btn-confirm">确认更改目录</button>
+            <input type="text" id="cacheDirInput" placeholder="默认: server/cache">
+            <button id="setCacheDirBtn" class="btn-confirm">确认</button>
             <div class="cache-info">
               <span id="cacheSize">计算中...</span>
               <button id="clearCacheBtn">清除缓存</button>
@@ -127,9 +121,9 @@
           <div class="control-group">
             <div class="inline-label">
               <label>并发加载</label>
-              <span id="concurrentValue" class="value">64</span>
+              <span id="concurrentValue" class="value">256</span>
             </div>
-            <input type="range" id="concurrentSlider" min="16" max="256" value="64" step="1">
+            <input type="range" id="concurrentSlider" min="16" max="512" value="256" step="1">
           </div>
         </div>
       </div>

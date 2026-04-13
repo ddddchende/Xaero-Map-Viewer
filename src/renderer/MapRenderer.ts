@@ -498,22 +498,14 @@ export class MapRenderer {
 
   private updateLodLevel(): void {
     let newLodLevel: number;
-    if (this.scale >= 0.5) {
+    if (this.scale >= 0.25) {
       newLodLevel = 0;
-    } else if (this.scale >= 0.35) {
-      newLodLevel = 1;
-    } else if (this.scale >= 0.2) {
-      newLodLevel = 2;
     } else if (this.scale >= 0.1) {
-      newLodLevel = 3;
-    } else if (this.scale >= 0.05) {
-      newLodLevel = 4;
-    } else if (this.scale >= 0.025) {
-      newLodLevel = 5;
-    } else if (this.scale >= 0.01) {
-      newLodLevel = 6;
+      newLodLevel = 1;
+    } else if (this.scale >= 0.04) {
+      newLodLevel = 2;
     } else {
-      newLodLevel = 7;
+      newLodLevel = 3;
     }
     
     if (newLodLevel !== this.currentLodLevel) {
@@ -534,6 +526,7 @@ export class MapRenderer {
     this.allRegionKeys.clear();
     this.regionLodLevels.clear();
     this.slotLastAccess.clear();
+    this.scheduleRender();
   }
 
   setPendingRegions(regions: Set<string>): void {
@@ -601,11 +594,14 @@ export class MapRenderer {
     const ratio = srcSize / dstSize;
     
     for (let dy = 0; dy < dstSize; dy++) {
+      const sy = Math.floor(dy * ratio);
+      const srcRowOffset = sy * srcSize * 4;
+      const dstRowOffset = dy * dstSize * 4;
+      
       for (let dx = 0; dx < dstSize; dx++) {
         const sx = Math.floor(dx * ratio);
-        const sy = Math.floor(dy * ratio);
-        const srcIdx = (sy * srcSize + sx) * 4;
-        const dstIdx = (dy * dstSize + dx) * 4;
+        const srcIdx = srcRowOffset + sx * 4;
+        const dstIdx = dstRowOffset + dx * 4;
         
         result[dstIdx] = pixels[srcIdx];
         result[dstIdx + 1] = pixels[srcIdx + 1];
@@ -736,7 +732,6 @@ export class MapRenderer {
     this.slotLastAccess.clear();
     this.loadedRegionKeys.clear();
     this.pendingRegionKeys.clear();
-    this.allRegionKeys.clear();
     this.regionLodLevels.clear();
   }
 
@@ -834,14 +829,14 @@ export class MapRenderer {
   }
   
   private renderPendingPlaceholders(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    if (this.pendingRegionKeys.size === 0) return;
+    if (this.allRegionKeys.size === 0) return;
     
     const bounds = this.getViewportBounds();
     
     for (let rx = bounds.startX; rx <= bounds.endX; rx++) {
       for (let rz = bounds.startZ; rz <= bounds.endZ; rz++) {
         const key = `${rx},${rz}`;
-        if (!this.pendingRegionKeys.has(key)) continue;
+        if (!this.allRegionKeys.has(key)) continue;
         if (this.loadedRegionKeys.has(key)) continue;
         
         const screenX = rx * REGION_SIZE * this.scale + this.offsetX;
@@ -850,7 +845,7 @@ export class MapRenderer {
         
         if (screenX + size < 0 || screenX > w || screenZ + size < 0 || screenZ > h) continue;
         
-        ctx.fillStyle = 'rgba(141, 85, 85, 0.35)';
+        ctx.fillStyle = 'rgba(60, 60, 80, 0.3)';
         ctx.fillRect(screenX, screenZ, size, size);
         
         ctx.strokeStyle = 'rgba(145, 145, 145, 0.25)';
