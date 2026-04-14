@@ -909,27 +909,43 @@ class XaeroMapViewer {
     const centerRegionX = Math.floor((bounds.startX + bounds.endX) / 2);
     const centerRegionZ = Math.floor((bounds.startZ + bounds.endZ) / 2);
     
-    const regionsToLoad: {x: number, z: number, dist: number}[] = [];
+    const currentLod = this.renderer.getCurrentLodLevel();
+    const overviewLod = Math.min(currentLod + 1, 3);
+    
+    const noDataRegions: {x: number, z: number, dist: number}[] = [];
+    const upgradeRegions: {x: number, z: number, dist: number}[] = [];
     
     for (let x = bounds.startX; x <= bounds.endX; x++) {
       for (let z = bounds.startZ; z <= bounds.endZ; z++) {
         const key = `${x},${z}`;
-        if (this.renderer.hasRegion(x, z)) continue;
         if (this.loadingRegions.has(key)) continue;
         if (this.allRegionSet.size > 0 && !this.allRegionSet.has(key)) continue;
         
         const dist = Math.abs(x - centerRegionX) + Math.abs(z - centerRegionZ);
-        regionsToLoad.push({x, z, dist});
+        
+        if (this.renderer.hasRegion(x, z)) continue;
+        
+        if (this.renderer.hasAnyLod(x, z)) {
+          upgradeRegions.push({x, z, dist});
+        } else {
+          noDataRegions.push({x, z, dist});
+        }
       }
     }
     
-    if (regionsToLoad.length === 0) return;
+    if (noDataRegions.length === 0 && upgradeRegions.length === 0) return;
     
-    regionsToLoad.sort((a, b) => a.dist - b.dist);
+    noDataRegions.sort((a, b) => a.dist - b.dist);
+    upgradeRegions.sort((a, b) => a.dist - b.dist);
     
-    const toLoad = regionsToLoad.slice(0, this.concurrentLoads);
+    if (noDataRegions.length > 0) {
+      const toLoad = noDataRegions.slice(0, this.concurrentLoads);
+      this.loadRegionsBatch(toLoad.map(r => ({x: r.x, z: r.z})), overviewLod);
+      return;
+    }
     
-    this.loadRegionsBatch(toLoad.map(r => ({x: r.x, z: r.z})));
+    const toLoad = upgradeRegions.slice(0, this.concurrentLoads);
+    this.loadRegionsBatch(toLoad.map(r => ({x: r.x, z: r.z})), currentLod);
   }
 
   private updatePendingRegions(): void {
@@ -960,13 +976,14 @@ class XaeroMapViewer {
       } else {
         this.updateStats();
         this.loadCacheSize();
+        this.loadVisibleRegions();
       }
     };
     
     processNext();
   }
 
-  private async loadRegionsBatch(regions: {x: number, z: number}[]): Promise<void> {
+  private async loadRegionsBatch(regions: {x: number, z: number}[], lod?: number): Promise<void> {
     if (regions.length === 0) return;
     
     const signal = this.abortController?.signal;
@@ -980,10 +997,11 @@ class XaeroMapViewer {
       this.updatePendingRegions();
       
       try {
-        await this.loadSingleRegionPixels(x, z, signal);
+        await this.loadSingleRegionPixels(x, z, signal, lod);
       } finally {
         this.loadingRegions.delete(key);
         this.updatePendingRegions();
+        this.loadVisibleRegions();
       }
       return;
     }
@@ -1001,14 +1019,14 @@ class XaeroMapViewer {
     
     try {
       const coordsStr = toLoad.map(r => `${r.x},${r.z}`).join(';');
-      const currentLod = this.renderer.getCurrentLodLevel();
+      const requestLod = lod ?? this.renderer.getCurrentLodLevel();
       const bounds = this.renderer.getViewportBounds();
       
       const payload: any = {
         world: this.currentWorld,
         dim: this.currentDim,
         coords: coordsStr,
-        lod: currentLod,
+        lod: requestLod,
         viewStartX: bounds.startX,
         viewStartZ: bounds.startZ,
         viewEndX: bounds.endX,
@@ -1045,10 +1063,10 @@ class XaeroMapViewer {
     }
   }
 
-  private async loadSingleRegionPixels(x: number, z: number, signal?: AbortSignal): Promise<void> {
+  private async loadSingleRegionPixels(x: number, z: number, signal?: AbortSignal, lod?: number): Promise<void> {
     try {
-      const currentLod = this.renderer.getCurrentLodLevel();
-      let url = `${API_BASE}/region-pixels?world=${encodeURIComponent(this.currentWorld!)}&dim=${encodeURIComponent(this.currentDim!)}&x=${x}&z=${z}&lod=${currentLod}`;
+      const requestLod = lod ?? this.renderer.getCurrentLodLevel();
+      let url = `${API_BASE}/region-pixels?world=${encodeURIComponent(this.currentWorld!)}&dim=${encodeURIComponent(this.currentDim!)}&x=${x}&z=${z}&lod=${requestLod}`;
       if (this.currentMapType) {
         url += `&mapType=${encodeURIComponent(this.currentMapType)}`;
       }
@@ -1062,7 +1080,7 @@ class XaeroMapViewer {
       const response = await fetch(url, { signal });
       if (response.ok) {
         const pixelData = new Uint8Array(await response.arrayBuffer());
-        this.renderer.addRegionPixels(x, z, pixelData, currentLod);
+        this.renderer.addRegionPixels(x, z, pixelData, requestLod);
         this.regionAccessTime.set(`${x},${z}`, Date.now());
         this.renderer.render();
         this.updateStats();

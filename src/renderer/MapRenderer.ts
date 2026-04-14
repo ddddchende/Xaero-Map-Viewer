@@ -750,6 +750,16 @@ export class MapRenderer {
     return loadedLod <= this.currentLodLevel;
   }
 
+  hasAnyLod(x: number, z: number): boolean {
+    const key = `${x},${z}`;
+    return this.loadedRegionKeys.has(key) && this.regionLodLevels.has(key);
+  }
+
+  getRegionLod(x: number, z: number): number | undefined {
+    const key = `${x},${z}`;
+    return this.regionLodLevels.get(key);
+  }
+
   removeRegion(x: number, z: number): void {
     const key = `${x},${z}`;
     const slot = this.regionSlots.get(key);
