@@ -9,6 +9,52 @@ const BLOCK_COLORS = workerData?.blockColors || {};
 const BIOME_COLORS = workerData?.biomeColors || {};
 const DEFAULT_BIOME = { grass: 0x91bd59, foliage: 0x77ab2f, water: 0x3f76e4 };
 
+const MAX_HEIGHT_CACHE = 256;
+const heightCache = new Map();
+const heightCacheOrder = [];
+
+function getHeightCacheKey(dimPath, regionX, regionZ, lod) {
+  return `${dimPath}:${regionX},${regionZ}:lod${lod}`;
+}
+
+function getCachedHeight(key) {
+  if (heightCache.has(key)) {
+    const idx = heightCacheOrder.indexOf(key);
+    if (idx !== -1) {
+      heightCacheOrder.splice(idx, 1);
+      heightCacheOrder.push(key);
+    }
+    return heightCache.get(key);
+  }
+  return null;
+}
+
+function setCachedHeight(key, heights) {
+  if (heightCache.size >= MAX_HEIGHT_CACHE) {
+    const oldestKey = heightCacheOrder.shift();
+    if (oldestKey) {
+      heightCache.delete(oldestKey);
+    }
+  }
+  heightCache.set(key, heights);
+  heightCacheOrder.push(key);
+}
+
+let currentTaskCancelled = false;
+let currentTaskId = null;
+
+parentPort.on('message', (msg) => {
+  if (msg.type === 'cancel') {
+    if (msg.taskId === currentTaskId) {
+      currentTaskCancelled = true;
+    }
+  }
+});
+
+function isCancelled() {
+  return currentTaskCancelled;
+}
+
 function computeBlockColor(state, biome, hasWaterOverlay) {
   if (!state || state === 'minecraft:air') {
     if (hasWaterOverlay) {
@@ -55,13 +101,14 @@ function applyShading(color, height, prevHeight, prevDiagHeight, light) {
     depthBrightness = 0.6 + (height / 63.0) * 0.4;
   }
   
-  if (prevHeight !== 32767 && prevDiagHeight !== 32767) {
-    const verticalSlope = height - prevHeight;
-    if (verticalSlope > 0) {
-      depthBrightness *= 1.3;
-    } else if (verticalSlope < 0) {
-      depthBrightness *= 0.7;
-    }
+  const effectivePrevHeight = prevHeight === 32767 ? height : prevHeight;
+  const effectivePrevDiagHeight = prevDiagHeight === 32767 ? height : prevDiagHeight;
+  
+  const verticalSlope = height - effectivePrevHeight;
+  if (verticalSlope > 0) {
+    depthBrightness *= 1.3;
+  } else if (verticalSlope < 0) {
+    depthBrightness *= 0.7;
   }
   
   const brightness = 0.8 * depthBrightness;
@@ -80,13 +127,14 @@ function applyShading(color, height, prevHeight, prevDiagHeight, light) {
   return (r << 16) | (g << 8) | b;
 }
 
-function renderRegionToPixels(regionData, lod = 0) {
+function extractHeightsFromRegion(regionData, lod = 0) {
   const step = 1 << lod;
   const srcSize = 512;
   const dstSize = srcSize >> lod;
-  const pixels = Buffer.alloc(dstSize * dstSize * 4);
   const heights = new Int16Array(dstSize * dstSize);
   heights.fill(32767);
+  
+  if (!regionData || !regionData.chunks) return heights;
   
   const chunks = regionData.chunks;
   
@@ -133,11 +181,101 @@ function renderRegionToPixels(regionData, lod = 0) {
               const dstPixelZ = srcPixelZ >> lod;
               
               const idx = dstPixelZ * dstSize + dstPixelX;
+              heights[idx] = block.h ?? 32767;
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  return heights;
+}
+
+function renderRegionToPixels(regionData, lod = 0, northHeights = null, westHeights = null, northwestHeights = null) {
+  const step = 1 << lod;
+  const srcSize = 512;
+  const dstSize = srcSize >> lod;
+  const pixels = Buffer.alloc(dstSize * dstSize * 4);
+  const heights = new Int16Array(dstSize * dstSize);
+  heights.fill(32767);
+  
+  const chunks = regionData.chunks;
+  
+  for (let chunkX = 0; chunkX < 8; chunkX++) {
+    if (isCancelled()) return null;
+    
+    const chunkRow = chunks[chunkX];
+    if (!chunkRow) continue;
+    
+    for (let chunkZ = 0; chunkZ < 8; chunkZ++) {
+      if (isCancelled()) return null;
+      
+      const chunk = chunkRow[chunkZ];
+      if (!chunk) continue;
+      
+      const tiles = chunk.tiles;
+      const baseX = chunkX * 64;
+      const baseZ = chunkZ * 64;
+      
+      for (let tileX = 0; tileX < 4; tileX++) {
+        const tileRow = tiles[tileX];
+        if (!tileRow) continue;
+        
+        for (let tileZ = 0; tileZ < 4; tileZ++) {
+          const tile = tileRow[tileZ];
+          if (!tile || !tile.blocks) continue;
+          
+          const blocks = tile.blocks;
+          const pixelBaseX = baseX + tileX * 16;
+          const pixelBaseZ = baseZ + tileZ * 16;
+          
+          for (let x = 0; x < 16; x++) {
+            const blockRow = blocks[x];
+            if (!blockRow) continue;
+            
+            const srcPixelX = pixelBaseX + x;
+            if (srcPixelX % step !== 0) continue;
+            if (srcPixelX >= srcSize) continue;
+            const dstPixelX = srcPixelX >> lod;
+            
+            for (let z = 0; z < 16; z++) {
+              const block = blockRow[z];
+              if (!block || !block.s) continue;
+              
+              const srcPixelZ = pixelBaseZ + z;
+              if (srcPixelZ % step !== 0) continue;
+              if (srcPixelZ >= srcSize) continue;
+              const dstPixelZ = srcPixelZ >> lod;
+              
+              const idx = dstPixelZ * dstSize + dstPixelX;
               const height = block.h ?? 32767;
               heights[idx] = height;
               
-              const prevHeight = dstPixelZ > 0 ? heights[idx - dstSize] : 32767;
-              const prevDiagHeight = (dstPixelZ > 0 && dstPixelX > 0) ? heights[idx - dstSize - 1] : 32767;
+              let prevHeight, prevDiagHeight;
+              
+              if (dstPixelZ > 0) {
+                prevHeight = heights[idx - dstSize];
+                if (dstPixelX > 0) {
+                  prevDiagHeight = heights[idx - dstSize - 1];
+                } else {
+                  prevDiagHeight = westHeights ? westHeights[(dstPixelZ - 1) * dstSize + (dstSize - 1)] : 32767;
+                }
+              } else {
+                if (northHeights) {
+                  prevHeight = northHeights[(dstSize - 1) * dstSize + dstPixelX];
+                  if (dstPixelX > 0) {
+                    prevDiagHeight = northHeights[(dstSize - 1) * dstSize + (dstPixelX - 1)];
+                  } else if (northwestHeights) {
+                    prevDiagHeight = northwestHeights[(dstSize - 1) * dstSize + (dstSize - 1)];
+                  } else {
+                    prevDiagHeight = 32767;
+                  }
+                } else {
+                  prevHeight = 32767;
+                  prevDiagHeight = 32767;
+                }
+              }
               
               const { color, alpha } = computeBlockColor(block.s, block.b, block.w);
               const shadedColor = applyShading(color, height, prevHeight, prevDiagHeight, block.l ?? 15);
@@ -561,8 +699,19 @@ function readTagValue(data, view, offset, type) {
 parentPort.on('message', async (task) => {
   const { taskId, dimPath, regionX, regionZ, caveMode, caveStart, lod } = task;
   
+  currentTaskId = taskId;
+  currentTaskCancelled = false;
+  
   try {
     let pixels;
+    let northRegionHeights = null;
+    let westRegionHeights = null;
+    let northwestRegionHeights = null;
+    
+    if (isCancelled()) {
+      parentPort.postMessage({ taskId, result: null });
+      return;
+    }
     
     if (caveMode === 0 || caveMode === null) {
       const regionData = await loadRegion(dimPath, regionX, regionZ);
@@ -570,12 +719,70 @@ parentPort.on('message', async (task) => {
         parentPort.postMessage({ taskId, result: null });
         return;
       }
-      pixels = renderRegionToPixels(regionData, lod);
+      
+      if (isCancelled()) {
+        parentPort.postMessage({ taskId, result: null });
+        return;
+      }
+      
+      const northKey = getHeightCacheKey(dimPath, regionX, regionZ - 1, lod);
+      const westKey = getHeightCacheKey(dimPath, regionX - 1, regionZ, lod);
+      const northwestKey = getHeightCacheKey(dimPath, regionX - 1, regionZ - 1, lod);
+      
+      northRegionHeights = getCachedHeight(northKey);
+      if (!northRegionHeights) {
+        const northRegionPath = path.join(dimPath, `${regionX}_${regionZ - 1}.zip`);
+        if (existsSync(northRegionPath)) {
+          const northRegionData = await loadRegion(dimPath, regionX, regionZ - 1);
+          if (northRegionData) {
+            northRegionHeights = extractHeightsFromRegion(northRegionData, lod);
+            setCachedHeight(northKey, northRegionHeights);
+          }
+        }
+      }
+      
+      if (isCancelled()) {
+        parentPort.postMessage({ taskId, result: null });
+        return;
+      }
+      
+      westRegionHeights = getCachedHeight(westKey);
+      if (!westRegionHeights) {
+        const westRegionPath = path.join(dimPath, `${regionX - 1}_${regionZ}.zip`);
+        if (existsSync(westRegionPath)) {
+          const westRegionData = await loadRegion(dimPath, regionX - 1, regionZ);
+          if (westRegionData) {
+            westRegionHeights = extractHeightsFromRegion(westRegionData, lod);
+            setCachedHeight(westKey, westRegionHeights);
+          }
+        }
+      }
+      
+      northwestRegionHeights = getCachedHeight(northwestKey);
+      if (!northwestRegionHeights) {
+        const northwestRegionPath = path.join(dimPath, `${regionX - 1}_${regionZ - 1}.zip`);
+        if (existsSync(northwestRegionPath)) {
+          const northwestRegionData = await loadRegion(dimPath, regionX - 1, regionZ - 1);
+          if (northwestRegionData) {
+            northwestRegionHeights = extractHeightsFromRegion(northwestRegionData, lod);
+            setCachedHeight(northwestKey, northwestRegionHeights);
+          }
+        }
+      }
+      
+      if (isCancelled()) {
+        parentPort.postMessage({ taskId, result: null });
+        return;
+      }
+      
+      pixels = renderRegionToPixels(regionData, lod, northRegionHeights, westRegionHeights, northwestRegionHeights);
     } else if (caveMode === 1) {
       const maxLayer = caveStart !== null ? Math.floor(caveStart / 16) : 7;
       const layers = [];
       
       for (let layer = 0; layer <= maxLayer; layer++) {
+        if (isCancelled()) break;
+        
         const cavePath = path.join(dimPath, 'caves', String(layer));
         if (existsSync(cavePath)) {
           const regionData = await loadRegion(cavePath, regionX, regionZ);
@@ -583,6 +790,11 @@ parentPort.on('message', async (task) => {
             layers.push({ layer, data: regionData });
           }
         }
+      }
+      
+      if (isCancelled()) {
+        parentPort.postMessage({ taskId, result: null });
+        return;
       }
       
       if (layers.length === 0) {
@@ -597,9 +809,10 @@ parentPort.on('message', async (task) => {
       }
     } else if (caveMode === 2) {
       const layers = [];
-      const maxLayer = 15;
       
-      for (let layer = 0; layer <= maxLayer; layer++) {
+      for (let layer = 0; layer <= 15; layer++) {
+        if (isCancelled()) break;
+        
         const cavePath = path.join(dimPath, 'caves', String(layer));
         if (existsSync(cavePath)) {
           const regionData = await loadRegion(cavePath, regionX, regionZ);
@@ -607,6 +820,11 @@ parentPort.on('message', async (task) => {
             layers.push({ layer, data: regionData });
           }
         }
+      }
+      
+      if (isCancelled()) {
+        parentPort.postMessage({ taskId, result: null });
+        return;
       }
       
       if (layers.length === 0) {
@@ -626,6 +844,11 @@ parentPort.on('message', async (task) => {
         return;
       }
       pixels = renderRegionToPixels(regionData, lod);
+    }
+    
+    if (isCancelled() || !pixels) {
+      parentPort.postMessage({ taskId, result: null });
+      return;
     }
     
     parentPort.postMessage({ taskId, result: pixels }, [pixels.buffer]);

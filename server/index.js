@@ -125,8 +125,22 @@ const workerBusy = [];
 const taskQueue = [];
 const workerTaskId = new Map();
 const cancelledRequests = new Set();
+const clientPendingRequests = new Map();
+const clientViewports = new Map();
 let taskIdCounter = 0;
 let requestIdCounter = 0;
+let clientIdCounter = 0;
+
+function isRegionInAnyViewport(regionX, regionZ) {
+  for (const [clientId, viewport] of clientViewports) {
+    if (viewport && 
+        regionX >= viewport.startX && regionX <= viewport.endX &&
+        regionZ >= viewport.startZ && regionZ <= viewport.endZ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function initWorkerPool() {
   for (let i = 0; i < NUM_WORKERS; i++) {
@@ -178,6 +192,11 @@ function processNextTask() {
       continue;
     }
     
+    if (!isRegionInAnyViewport(task.regionX, task.regionZ)) {
+      task.resolve(null);
+      continue;
+    }
+    
     workerBusy[freeWorkerIndex] = true;
     
     workerTaskId.set(task.taskId, { 
@@ -185,6 +204,8 @@ function processNextTask() {
       reject: task.reject, 
       workerIndex: freeWorkerIndex,
       requestId: task.requestId,
+      regionX: task.regionX,
+      regionZ: task.regionZ,
       cancelled: false
     });
     
@@ -214,6 +235,23 @@ function cancelRequest(requestId) {
   for (const [taskId, task] of workerTaskId.entries()) {
     if (task.requestId === requestId) {
       task.cancelled = true;
+      workers[task.workerIndex].postMessage({ type: 'cancel', taskId });
+    }
+  }
+}
+
+function cancelTasksNotInViewport() {
+  for (const [taskId, task] of workerTaskId.entries()) {
+    if (!task.cancelled && !isRegionInAnyViewport(task.regionX, task.regionZ)) {
+      task.cancelled = true;
+      workers[task.workerIndex].postMessage({ type: 'cancel', taskId });
+    }
+  }
+  
+  for (let i = taskQueue.length - 1; i >= 0; i--) {
+    if (!isRegionInAnyViewport(taskQueue[i].regionX, taskQueue[i].regionZ)) {
+      taskQueue[i].resolve(null);
+      taskQueue.splice(i, 1);
     }
   }
 }
@@ -952,13 +990,14 @@ function applyShading(color, height, prevHeight, prevDiagHeight, light) {
     depthBrightness = 0.6 + (height / 63.0) * 0.4;
   }
   
-  if (prevHeight !== 32767 && prevDiagHeight !== 32767) {
-    const verticalSlope = height - prevHeight;
-    if (verticalSlope > 0) {
-      depthBrightness *= 1.3;
-    } else if (verticalSlope < 0) {
-      depthBrightness *= 0.7;
-    }
+  const effectivePrevHeight = prevHeight === 32767 ? height : prevHeight;
+  const effectivePrevDiagHeight = prevDiagHeight === 32767 ? height : prevDiagHeight;
+  
+  const verticalSlope = height - effectivePrevHeight;
+  if (verticalSlope > 0) {
+    depthBrightness *= 1.3;
+  } else if (verticalSlope < 0) {
+    depthBrightness *= 0.7;
   }
   
   const brightness = 0.8 * depthBrightness;
@@ -977,7 +1016,66 @@ function applyShading(color, height, prevHeight, prevDiagHeight, light) {
   return (r << 16) | (g << 8) | b;
 }
 
-function renderRegionToPixels(regionData) {
+function extractHeightsFromRegion(regionData) {
+  const size = 512;
+  const heights = new Int16Array(size * size);
+  heights.fill(32767);
+  
+  if (!regionData || !regionData.chunks) return heights;
+  
+  const chunks = regionData.chunks;
+  
+  for (let chunkX = 0; chunkX < 8; chunkX++) {
+    const chunkRow = chunks[chunkX];
+    if (!chunkRow) continue;
+    
+    for (let chunkZ = 0; chunkZ < 8; chunkZ++) {
+      const chunk = chunkRow[chunkZ];
+      if (!chunk) continue;
+      
+      const tiles = chunk.tiles;
+      const baseX = chunkX * 64;
+      const baseZ = chunkZ * 64;
+      
+      for (let tileX = 0; tileX < 4; tileX++) {
+        const tileRow = tiles[tileX];
+        if (!tileRow) continue;
+        
+        for (let tileZ = 0; tileZ < 4; tileZ++) {
+          const tile = tileRow[tileZ];
+          if (!tile || !tile.blocks) continue;
+          
+          const blocks = tile.blocks;
+          const pixelBaseX = baseX + tileX * 16;
+          const pixelBaseZ = baseZ + tileZ * 16;
+          
+          for (let x = 0; x < 16; x++) {
+            const blockRow = blocks[x];
+            if (!blockRow) continue;
+            
+            const pixelX = pixelBaseX + x;
+            if (pixelX >= size) continue;
+            
+            for (let z = 0; z < 16; z++) {
+              const block = blockRow[z];
+              if (!block || !block.s) continue;
+              
+              const pixelZ = pixelBaseZ + z;
+              if (pixelZ >= size) continue;
+              
+              const idx = pixelZ * size + pixelX;
+              heights[idx] = block.h ?? 32767;
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  return heights;
+}
+
+function renderRegionToPixels(regionData, northRegionHeights = null, westRegionHeights = null, northwestRegionHeights = null) {
   const size = 512;
   const pixels = Buffer.alloc(size * size * 4);
   const heights = new Int16Array(size * size);
@@ -1027,8 +1125,30 @@ function renderRegionToPixels(regionData) {
               const height = block.h ?? 32767;
               heights[idx] = height;
               
-              const prevHeight = pixelZ > 0 ? heights[idx - size] : 32767;
-              const prevDiagHeight = (pixelZ > 0 && pixelX > 0) ? heights[idx - size - 1] : 32767;
+              let prevHeight, prevDiagHeight;
+              
+              if (pixelZ > 0) {
+                prevHeight = heights[idx - size];
+                if (pixelX > 0) {
+                  prevDiagHeight = heights[idx - size - 1];
+                } else {
+                  prevDiagHeight = westRegionHeights ? westRegionHeights[(pixelZ - 1) * size + (size - 1)] : 32767;
+                }
+              } else {
+                if (northRegionHeights) {
+                  prevHeight = northRegionHeights[(size - 1) * size + pixelX];
+                  if (pixelX > 0) {
+                    prevDiagHeight = northRegionHeights[(size - 1) * size + (pixelX - 1)];
+                  } else if (northwestRegionHeights) {
+                    prevDiagHeight = northwestRegionHeights[(size - 1) * size + (size - 1)];
+                  } else {
+                    prevDiagHeight = 32767;
+                  }
+                } else {
+                  prevHeight = 32767;
+                  prevDiagHeight = 32767;
+                }
+              }
               
               const { color, alpha } = computeBlockColor(block.s, block.b, block.w);
               const shadedColor = applyShading(color, height, prevHeight, prevDiagHeight, block.l ?? 15);
@@ -1934,7 +2054,25 @@ const wsClients = new Set();
 
 wss.on('connection', (ws) => {
   wsClients.add(ws);
-  ws.on('close', () => wsClients.delete(ws));
+  
+  const clientId = clientIdCounter++;
+  ws.clientId = clientId;
+  clientPendingRequests.set(clientId, { requestId: null, lod: null });
+  
+  ws.send(JSON.stringify({ 
+    type: 'server-config', 
+    config: {
+      cacheDirectory,
+      mapDirectory,
+      baseMapDirectory
+    }
+  }));
+  
+  ws.on('close', () => {
+    wsClients.delete(ws);
+    clientPendingRequests.delete(clientId);
+    clientViewports.delete(clientId);
+  });
   ws.on('message', async (data) => {
     try {
       const msg = JSON.parse(data.toString());
@@ -1949,11 +2087,33 @@ async function handleWsMessage(ws, msg) {
   const { type, requestId, payload } = msg;
   
   if (type === 'batch-regions') {
-    const { world, dim, coords, mapType, caveMode, caveStart, lod } = payload;
+    const { world, dim, coords, mapType, caveMode, caveStart, lod, viewStartX, viewStartZ, viewEndX, viewEndZ } = payload;
     
     if (!dim || !coords) {
       ws.send(JSON.stringify({ type: 'error', requestId, error: '缺少参数' }));
       return;
+    }
+    
+    const clientId = ws.clientId;
+    const lodValue = lod !== undefined ? parseInt(lod) : 0;
+    
+    if (clientId !== undefined) {
+      const pending = clientPendingRequests.get(clientId);
+      if (pending && pending.requestId !== null && pending.lod !== null && pending.lod !== lodValue) {
+        cancelRequest(pending.requestId);
+      }
+      clientPendingRequests.set(clientId, { requestId, lod: lodValue });
+      
+      if (viewStartX !== undefined && viewStartZ !== undefined && 
+          viewEndX !== undefined && viewEndZ !== undefined) {
+        clientViewports.set(clientId, {
+          startX: parseInt(viewStartX),
+          startZ: parseInt(viewStartZ),
+          endX: parseInt(viewEndX),
+          endZ: parseInt(viewEndZ)
+        });
+        cancelTasksNotInViewport();
+      }
     }
     
     try {
@@ -1970,7 +2130,6 @@ async function handleWsMessage(ws, msg) {
       
       const caveModeValue = caveMode !== undefined ? parseInt(caveMode) : null;
       const caveStartValue = caveStart !== undefined ? parseInt(caveStart) : null;
-      const lodValue = lod !== undefined ? parseInt(lod) : 0;
       
       const coordPairs = coords.split(';').map(c => {
         const [x, z] = c.split(',').map(Number);
@@ -1988,9 +2147,12 @@ async function handleWsMessage(ws, msg) {
       }
       
       const results = await Promise.all(
-        coordPairs.map(coord => 
-          loadRegionPixels(dimPath, coord.x, coord.z, caveModeValue, caveStartValue, lodValue, 0, requestId)
-        )
+        coordPairs.map(coord => {
+          if (!isRegionInAnyViewport(coord.x, coord.z)) {
+            return null;
+          }
+          return loadRegionPixels(dimPath, coord.x, coord.z, caveModeValue, caveStartValue, lodValue, 0, requestId);
+        })
       );
       
       let totalSize = 12;
@@ -2031,6 +2193,13 @@ async function handleWsMessage(ws, msg) {
     } catch (e) {
       console.error('WebSocket batch-regions error:', e.message);
       ws.send(JSON.stringify({ type: 'error', requestId, error: e.message }));
+    } finally {
+      if (clientId !== undefined) {
+        const pending = clientPendingRequests.get(clientId);
+        if (pending && pending.requestId === requestId) {
+          clientPendingRequests.set(clientId, { requestId: null, lod: null });
+        }
+      }
     }
   }
 }

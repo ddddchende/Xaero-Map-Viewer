@@ -1,6 +1,5 @@
 import { MapRenderer, ViewportBounds } from './renderer/MapRenderer';
 
-const DEFAULT_SERVER = 'localhost:3001';
 const STORAGE_KEY_SUBDIR = 'xaero_map_subdir';
 const STORAGE_KEY_SERVER = 'xaero_map_server';
 const STORAGE_KEY_MAP_STATE = 'xaero_map_state';
@@ -8,8 +7,14 @@ const STORAGE_KEY_SECTIONS = 'xaero_map_sections';
 const STORAGE_KEY_CONCURRENT = 'xaero_map_concurrent';
 const DEFAULT_CONCURRENT_LOADS = 256;
 
-let API_BASE = `http://${DEFAULT_SERVER}/api`;
-let WS_BASE = `ws://${DEFAULT_SERVER}`;
+function getDefaultServer(): string {
+  const host = window.location.host;
+  return host || 'localhost:3001';
+}
+
+let currentServer = getDefaultServer();
+let API_BASE = `${window.location.protocol}//${currentServer}/api`;
+let WS_BASE = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${currentServer}`;
 
 interface MapState {
   world: string | null;
@@ -64,11 +69,13 @@ class XaeroMapViewer {
   }
   
   private loadServerConfig(): void {
-    const savedServer = localStorage.getItem(STORAGE_KEY_SERVER) || DEFAULT_SERVER;
-    API_BASE = `http://${savedServer}/api`;
+    const savedServer = localStorage.getItem(STORAGE_KEY_SERVER);
+    currentServer = savedServer || getDefaultServer();
+    API_BASE = `${window.location.protocol}//${currentServer}/api`;
+    WS_BASE = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${currentServer}`;
     const serverInput = document.getElementById('serverInput') as HTMLInputElement;
-    if (serverInput) serverInput.value = savedServer;
-    this.updateCurrentServerDisplay(savedServer);
+    if (serverInput) serverInput.value = currentServer;
+    this.updateCurrentServerDisplay(currentServer);
   }
   
   private loadMapState(): void {
@@ -126,8 +133,9 @@ class XaeroMapViewer {
       return;
     }
     
-    API_BASE = `http://${address}/api`;
-    WS_BASE = `ws://${address}`;
+    currentServer = address;
+    API_BASE = `${window.location.protocol}//${address}/api`;
+    WS_BASE = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${address}`;
     localStorage.setItem(STORAGE_KEY_SERVER, address);
     this.updateCurrentServerDisplay(address);
     this.updateStatus('正在连接服务器...');
@@ -992,12 +1000,17 @@ class XaeroMapViewer {
     try {
       const coordsStr = toLoad.map(r => `${r.x},${r.z}`).join(';');
       const currentLod = this.renderer.getCurrentLodLevel();
+      const bounds = this.renderer.getViewportBounds();
       
       const payload: any = {
         world: this.currentWorld,
         dim: this.currentDim,
         coords: coordsStr,
-        lod: currentLod
+        lod: currentLod,
+        viewStartX: bounds.startX,
+        viewStartZ: bounds.startZ,
+        viewEndX: bounds.endX,
+        viewEndZ: bounds.endZ
       };
       
       if (this.currentMapType) {
@@ -1140,13 +1153,27 @@ class XaeroMapViewer {
   }
 
   private handleWsMessage(msg: any): void {
-    const { type, requestId, error } = msg;
+    const { type, requestId, error, config } = msg;
+    
+    if (type === 'server-config' && config) {
+      this.applyServerConfig(config);
+      return;
+    }
     
     if (type === 'error' && requestId && error) {
       const pending = this.pendingWsRequests.get(requestId);
       if (pending) {
         this.pendingWsRequests.delete(requestId);
         pending.reject(new Error(error));
+      }
+    }
+  }
+  
+  private applyServerConfig(config: { cacheDirectory?: string; mapDirectory?: string; baseMapDirectory?: string }): void {
+    if (config.cacheDirectory) {
+      const cacheDirInput = document.getElementById('cacheDirInput') as HTMLInputElement;
+      if (cacheDirInput) {
+        cacheDirInput.value = config.cacheDirectory;
       }
     }
   }
