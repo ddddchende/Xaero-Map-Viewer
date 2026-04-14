@@ -1,7 +1,8 @@
 {
   "port": 3001,
   "maxMemoryMB": 4096,
+  "mapDirectory": "E:\\Game\\AC1.21.4基础整合包\\.minecraft\\versions\\1.21.1-Fabric 0.16.14\\xaero\\world-map",
   "maxCacheEntries": 3500,
-  "maxConcurrentLoads": 256,
-  "maxBatchRegions": 256
+  "maxConcurrentLoads": 512,
+  "maxBatchRegions": 512
 }

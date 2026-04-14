@@ -6,7 +6,7 @@
   <title>Xaero Map Viewer - Minecraft Style</title>
   <link rel="stylesheet" href="/styles/main.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%238B5A2B' x='10' y='10' width='80' height='80'/><rect fill='%2371A033' x='10' y='10' width='80' height='20'/><rect fill='%236B4423' x='10' y='70' width='80' height='20'/></svg>">
-  <script type="module" crossorigin src="/assets/index-CAGk7sQ1.js"></script>
+  <script type="module" crossorigin src="/assets/index-SwYF3hCV.js"></script>
 </head>
 <body>
   <button id="toggleSidebar">☰</button>
@@ -42,13 +42,12 @@
         <div class="section-content">
           <div class="control-group">
             <label>地图目录</label>
-            <input type="text" id="dirInput" placeholder="输入地图目录路径">
-            <button id="setDirBtn" class="btn-confirm">确认</button>
+            <select id="dirSelector"></select>
           </div>
           <div class="control-group">
             <label>缓存目录</label>
             <input type="text" id="cacheDirInput" placeholder="默认: server/cache">
-            <button id="setCacheDirBtn" class="btn-confirm">确认</button>
+            <button id="setCacheDirBtn" class="btn-confirm">确认更改目录</button>
             <div class="cache-info">
               <span id="cacheSize">计算中...</span>
               <button id="clearCacheBtn">清除缓存</button>

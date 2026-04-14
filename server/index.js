@@ -10,6 +10,8 @@ import { cpus } from 'os';
 import { Worker } from 'worker_threads';
 import Database from 'better-sqlite3';
 import zlib from 'zlib';
+import { createServer } from 'http';
+import { WebSocketServer } from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,6 +24,7 @@ app.use(compression({ level: 9, threshold: 1024 }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../dist')));
 
+let baseMapDirectory = '';
 let mapDirectory = '';
 let cacheDirectory = path.join(__dirname, 'cache');
 let db = null;
@@ -41,8 +44,8 @@ function loadUserConfig() {
       if (config.cacheDirectory) {
         cacheDirectory = config.cacheDirectory;
       }
-      if (config.mapDirectory) {
-        mapDirectory = config.mapDirectory;
+      if (config.selectedSubDir && baseMapDirectory) {
+        mapDirectory = path.join(baseMapDirectory, config.selectedSubDir);
       }
     } else {
       saveUserConfig();
@@ -55,10 +58,13 @@ function loadUserConfig() {
 
 function saveUserConfig() {
   try {
-    writeFileSync(USER_CONFIG_FILE, JSON.stringify({
-      cacheDirectory,
-      mapDirectory
-    }, null, 2));
+    const config = {
+      cacheDirectory
+    };
+    if (baseMapDirectory && mapDirectory && mapDirectory.startsWith(baseMapDirectory)) {
+      config.selectedSubDir = path.relative(baseMapDirectory, mapDirectory);
+    }
+    writeFileSync(USER_CONFIG_FILE, JSON.stringify(config, null, 2));
   } catch (e) {
     console.log('Failed to save user config:', e.message);
   }
@@ -68,6 +74,9 @@ function loadServerConfig() {
   try {
     if (existsSync(SERVER_CONFIG_FILE)) {
       const config = JSON.parse(readFileSync(SERVER_CONFIG_FILE, 'utf-8'));
+      if (config.mapDirectory) {
+        baseMapDirectory = config.mapDirectory;
+      }
       if (config.maxCacheEntries) {
         maxMemoryCacheEntries = config.maxCacheEntries;
       }
@@ -89,6 +98,7 @@ function loadServerConfig() {
 function saveServerConfig() {
   try {
     writeFileSync(SERVER_CONFIG_FILE, JSON.stringify({
+      mapDirectory: baseMapDirectory,
       maxCacheEntries: maxMemoryCacheEntries,
       maxConcurrentLoads,
       maxBatchRegions
@@ -98,8 +108,8 @@ function saveServerConfig() {
   }
 }
 
-loadUserConfig();
 loadServerConfig();
+loadUserConfig();
 
 const MAX_MEMORY_CACHE_ENTRIES = maxMemoryCacheEntries;
 const MAX_CONCURRENT_LOADS = maxConcurrentLoads;
@@ -1038,6 +1048,53 @@ function renderRegionToPixels(regionData) {
   return pixels;
 }
 
+app.get('/api/map-subdirectories', async (req, res) => {
+  if (!baseMapDirectory) {
+    return res.status(400).json({ error: '未配置地图基础目录，请在 server_config.json 中设置 mapDirectory' });
+  }
+  
+  if (!existsSync(baseMapDirectory)) {
+    return res.status(400).json({ error: '地图基础目录不存在', path: baseMapDirectory });
+  }
+  
+  try {
+    const entries = await readdir(baseMapDirectory, { withFileTypes: true });
+    const subDirs = [];
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        subDirs.push(entry.name);
+      }
+    }
+    subDirs.sort();
+    res.json({ baseDirectory: baseMapDirectory, subdirectories: subDirs });
+  } catch (error) {
+    res.status(500).json({ error: `读取目录失败: ${error.message}` });
+  }
+});
+
+app.post('/api/set-map-subdirectory', async (req, res) => {
+  const { subdirectory } = req.body;
+  
+  if (!baseMapDirectory) {
+    return res.status(400).json({ error: '未配置地图基础目录，请在 server_config.json 中设置 mapDirectory' });
+  }
+  
+  if (!subdirectory) {
+    return res.status(400).json({ error: '请提供子目录名称' });
+  }
+  
+  const fullDir = path.join(baseMapDirectory, subdirectory);
+  
+  if (!existsSync(fullDir)) {
+    return res.status(400).json({ error: '子目录不存在', path: fullDir });
+  }
+  
+  mapDirectory = fullDir;
+  initDatabase(fullDir);
+  saveUserConfig();
+  res.json({ success: true, directory: fullDir, subdirectory });
+});
+
 app.post('/api/set-directory', async (req, res) => {
   const { directory } = req.body;
   
@@ -1870,11 +1927,120 @@ function readTagValue(data, view, offset, type) {
   }
 }
 
-app.listen(PORT, async () => {
+const server = createServer(app);
+const wss = new WebSocketServer({ server });
+
+const wsClients = new Set();
+
+wss.on('connection', (ws) => {
+  wsClients.add(ws);
+  ws.on('close', () => wsClients.delete(ws));
+  ws.on('message', async (data) => {
+    try {
+      const msg = JSON.parse(data.toString());
+      await handleWsMessage(ws, msg);
+    } catch (e) {
+      ws.send(JSON.stringify({ error: e.message }));
+    }
+  });
+});
+
+async function handleWsMessage(ws, msg) {
+  const { type, requestId, payload } = msg;
+  
+  if (type === 'batch-regions') {
+    const { world, dim, coords, mapType, caveMode, caveStart, lod } = payload;
+    
+    if (!dim || !coords) {
+      ws.send(JSON.stringify({ type: 'error', requestId, error: '缺少参数' }));
+      return;
+    }
+    
+    try {
+      let basePath = mapDirectory;
+      if (world && world !== '当前世界') basePath = path.join(mapDirectory, world);
+      
+      let dimPath = path.join(basePath, dim);
+      if (mapType) {
+        dimPath = path.join(dimPath, mapType);
+      } else {
+        const mapTypes = await listMapTypes(dimPath);
+        if (mapTypes.length > 0) dimPath = path.join(dimPath, mapTypes[0].path);
+      }
+      
+      const caveModeValue = caveMode !== undefined ? parseInt(caveMode) : null;
+      const caveStartValue = caveStart !== undefined ? parseInt(caveStart) : null;
+      const lodValue = lod !== undefined ? parseInt(lod) : 0;
+      
+      const coordPairs = coords.split(';').map(c => {
+        const [x, z] = c.split(',').map(Number);
+        return { x, z };
+      }).filter(c => !isNaN(c.x) && !isNaN(c.z)).slice(0, MAX_BATCH_REGIONS);
+      
+      const totalRegions = coordPairs.length;
+      if (totalRegions === 0) {
+        const emptyBuffer = Buffer.alloc(12);
+        emptyBuffer.writeUInt32LE(requestId, 0);
+        emptyBuffer.writeUInt32LE(0, 4);
+        emptyBuffer.writeUInt32LE(lodValue, 8);
+        ws.send(emptyBuffer);
+        return;
+      }
+      
+      const results = await Promise.all(
+        coordPairs.map(coord => 
+          loadRegionPixels(dimPath, coord.x, coord.z, caveModeValue, caveStartValue, lodValue, 0, requestId)
+        )
+      );
+      
+      let totalSize = 12;
+      for (let i = 0; i < totalRegions; i++) {
+        totalSize += 12 + (results[i] ? results[i].length : 0);
+      }
+      
+      const buffer = Buffer.alloc(totalSize);
+      let offset = 0;
+      
+      buffer.writeUInt32LE(requestId, offset);
+      offset += 4;
+      buffer.writeUInt32LE(totalRegions, offset);
+      offset += 4;
+      buffer.writeUInt32LE(lodValue, offset);
+      offset += 4;
+      
+      for (let i = 0; i < totalRegions; i++) {
+        buffer.writeInt32LE(coordPairs[i].x, offset);
+        buffer.writeInt32LE(coordPairs[i].z, offset + 4);
+        
+        if (results[i]) {
+          const resultBuffer = Buffer.isBuffer(results[i]) ? results[i] : Buffer.from(results[i]);
+          buffer.writeUInt32LE(resultBuffer.length, offset + 8);
+          resultBuffer.copy(buffer, offset + 12);
+          offset += 12 + resultBuffer.length;
+        } else {
+          buffer.writeUInt32LE(0, offset + 8);
+          offset += 12;
+        }
+      }
+      
+      results.length = 0;
+      pruneMemoryCache();
+      if (global.gc) global.gc();
+      
+      ws.send(buffer);
+    } catch (e) {
+      console.error('WebSocket batch-regions error:', e.message);
+      ws.send(JSON.stringify({ type: 'error', requestId, error: e.message }));
+    }
+  }
+}
+
+server.listen(PORT, async () => {
   await ensureCacheDir();
   initDatabase(mapDirectory || null);
   initWorkerPool();
   console.log(`Xaero Map Server running at http://localhost:${PORT}`);
+  console.log(`WebSocket server ready at ws://localhost:${PORT}`);
   console.log(`Default directory: ${mapDirectory || '(not set)'}`);
   console.log(`Cache database: ${currentMapDbPath}`);
   console.log(`Config: maxCacheEntries=${MAX_MEMORY_CACHE_ENTRIES}, maxConcurrentLoads=${MAX_CONCURRENT_LOADS}, maxBatchRegions=${MAX_BATCH_REGIONS}`);

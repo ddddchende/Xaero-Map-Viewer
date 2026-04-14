@@ -1,7 +1,7 @@
 import { MapRenderer, ViewportBounds } from './renderer/MapRenderer';
 
 const DEFAULT_SERVER = 'localhost:3001';
-const STORAGE_KEY_DIR = 'xaero_map_directory';
+const STORAGE_KEY_SUBDIR = 'xaero_map_subdir';
 const STORAGE_KEY_SERVER = 'xaero_map_server';
 const STORAGE_KEY_MAP_STATE = 'xaero_map_state';
 const STORAGE_KEY_SECTIONS = 'xaero_map_sections';
@@ -9,6 +9,7 @@ const STORAGE_KEY_CONCURRENT = 'xaero_map_concurrent';
 const DEFAULT_CONCURRENT_LOADS = 256;
 
 let API_BASE = `http://${DEFAULT_SERVER}/api`;
+let WS_BASE = `ws://${DEFAULT_SERVER}`;
 
 interface MapState {
   world: string | null;
@@ -41,6 +42,10 @@ class XaeroMapViewer {
   private viewportChangeTimeout: ReturnType<typeof setTimeout> | null = null;
   private lastViewportBounds: ViewportBounds | null = null;
   private currentRequestId: number = 0;
+  private ws: WebSocket | null = null;
+  private wsConnected: boolean = false;
+  private wsReconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private pendingWsRequests: Map<number, { resolve: Function; reject: Function }> = new Map();
 
   constructor() {
     this.loadServerConfig();
@@ -54,7 +59,7 @@ class XaeroMapViewer {
     this.renderer.setOnLodChange(() => this.onLodChange());
     
     this.setupUI();
-    this.loadCachedDirectory();
+    this.connectWebSocket();
     this.startAutoLoad();
   }
   
@@ -122,10 +127,18 @@ class XaeroMapViewer {
     }
     
     API_BASE = `http://${address}/api`;
+    WS_BASE = `ws://${address}`;
     localStorage.setItem(STORAGE_KEY_SERVER, address);
     this.updateCurrentServerDisplay(address);
     this.updateStatus('正在连接服务器...');
-    this.checkServerConnection();
+    
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.connectWebSocket();
+    
+    this.loadSubdirectories();
   }
 
   private startAutoLoad(): void {
@@ -133,18 +146,115 @@ class XaeroMapViewer {
       if (this.currentWorld && this.currentDim) {
         this.loadVisibleRegions();
       }
-    }, 500);
+    }, 200);
   }
 
   private loadCachedDirectory(): void {
-    const cachedDir = localStorage.getItem(STORAGE_KEY_DIR);
-    const dirInput = document.getElementById('dirInput') as HTMLInputElement;
+    this.loadSubdirectories();
+  }
+
+  private async loadSubdirectories(): Promise<void> {
+    try {
+      const response = await fetch(`${API_BASE}/map-subdirectories`);
+      if (!response.ok) {
+        const error = await response.json();
+        this.updateStatus(error.error || '获取子目录列表失败');
+        return;
+      }
+      
+      const data = await response.json();
+      const selector = document.getElementById('dirSelector') as HTMLSelectElement;
+      if (!selector) return;
+      
+      selector.innerHTML = '';
+      
+      if (data.subdirectories.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '无可用子目录';
+        selector.appendChild(option);
+        this.updateStatus('基础目录下无子目录');
+        return;
+      }
+      
+      for (const subDir of data.subdirectories) {
+        const option = document.createElement('option');
+        option.value = subDir;
+        option.textContent = subDir;
+        selector.appendChild(option);
+      }
+      
+      const cachedSubDir = localStorage.getItem(STORAGE_KEY_SUBDIR);
+      const subDirExists = cachedSubDir && data.subdirectories.includes(cachedSubDir);
+      
+      if (subDirExists) {
+        selector.value = cachedSubDir!;
+        await this.setMapSubdirectory(cachedSubDir!, true);
+      } else if (data.subdirectories.length > 0) {
+        selector.value = data.subdirectories[0];
+        await this.setMapSubdirectory(data.subdirectories[0], true);
+      } else {
+        this.checkServerConnection();
+      }
+    } catch {
+      this.updateStatus('连接服务器失败');
+    }
+  }
+
+  private async setMapSubdirectory(subdirectory: string, isAutoLoad: boolean): Promise<void> {
+    if (!subdirectory) {
+      if (!isAutoLoad) alert('请选择地图子目录');
+      return;
+    }
     
-    if (cachedDir) {
-      if (dirInput) dirInput.value = cachedDir;
-      this.setDirectory(cachedDir, true);
-    } else {
-      this.checkServerConnection();
+    if (this.isLoading) return;
+    this.isLoading = true;
+    
+    this.cancelServerRequest();
+    
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+    this.abortController = new AbortController();
+    
+    this.currentWorld = null;
+    this.currentDim = null;
+    this.currentMapType = null;
+    this.allRegions = [];
+    this.allRegionSet.clear();
+    this.loadingRegions.clear();
+    this.regionAccessTime.clear();
+    this.mapTypes = [];
+    
+    this.renderer.clearAllRegions();
+    
+    this.showLoading(true);
+    this.updateStatus('正在设置目录...');
+    
+    try {
+      const response = await fetch(`${API_BASE}/set-map-subdirectory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subdirectory })
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        if (!isAutoLoad) alert(error.error || '设置目录失败');
+        this.updateStatus('目录设置失败');
+        return;
+      }
+      
+      localStorage.setItem(STORAGE_KEY_SUBDIR, subdirectory);
+      this.updateStatus(`目录已设置: ${subdirectory}`);
+      this.loadCacheSize();
+      await this.loadWorlds(true);
+    } catch (e) {
+      if (!isAutoLoad) alert('连接服务器失败');
+      this.updateStatus('连接服务器失败');
+    } finally {
+      this.showLoading(false);
+      this.isLoading = false;
     }
   }
 
@@ -165,8 +275,7 @@ class XaeroMapViewer {
     const mapTypeSelector = document.getElementById('mapTypeSelector') as HTMLSelectElement;
     const zoomSlider = document.getElementById('zoomSlider') as HTMLInputElement;
     const gotoBtn = document.getElementById('gotoCoords') as HTMLButtonElement;
-    const setDirBtn = document.getElementById('setDirBtn') as HTMLButtonElement;
-    const dirInput = document.getElementById('dirInput') as HTMLInputElement;
+    const dirSelector = document.getElementById('dirSelector') as HTMLSelectElement;
     const setServerBtn = document.getElementById('setServerBtn') as HTMLButtonElement;
     const serverInput = document.getElementById('serverInput') as HTMLInputElement;
     const toggleSidebar = document.getElementById('toggleSidebar');
@@ -181,7 +290,7 @@ class XaeroMapViewer {
       this.renderer.setScale(Math.pow(2, value));
     });
     gotoBtn?.addEventListener('click', () => this.handleGotoCoords());
-    setDirBtn?.addEventListener('click', () => this.setDirectory(dirInput.value, false));
+    dirSelector?.addEventListener('change', () => this.setMapSubdirectory(dirSelector.value, false));
     setServerBtn?.addEventListener('click', () => this.setServerAddress(serverInput.value));
     
     toggleSidebar?.addEventListener('click', () => {
@@ -364,7 +473,7 @@ class XaeroMapViewer {
           cacheSizeEl.textContent = '缓存: 计算失败';
         }
       }
-    }, 500);
+    }, 100);
   }
 
   private async setCacheDirectory(directory: string): Promise<void> {
@@ -411,62 +520,6 @@ class XaeroMapViewer {
       alert('缓存已清除');
     } catch (error) {
       alert('清除缓存失败: ' + error);
-    }
-  }
-
-  private async setDirectory(directory: string, isAutoLoad: boolean): Promise<void> {
-    if (!directory) {
-      if (!isAutoLoad) alert('请输入地图目录路径');
-      return;
-    }
-    
-    if (this.isLoading) return;
-    this.isLoading = true;
-    
-    this.cancelServerRequest();
-    
-    if (this.abortController) {
-      this.abortController.abort();
-    }
-    this.abortController = new AbortController();
-    
-    this.currentWorld = null;
-    this.currentDim = null;
-    this.currentMapType = null;
-    this.allRegions = [];
-    this.allRegionSet.clear();
-    this.loadingRegions.clear();
-    this.regionAccessTime.clear();
-    this.mapTypes = [];
-    
-    this.renderer.clearAllRegions();
-    
-    this.showLoading(true);
-    this.updateStatus('正在设置目录...');
-    
-    try {
-      const response = await fetch(`${API_BASE}/set-directory`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ directory })
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        if (!isAutoLoad) alert(error.error || '设置目录失败');
-        this.updateStatus('目录设置失败');
-        return;
-      }
-      
-      localStorage.setItem(STORAGE_KEY_DIR, directory);
-      this.updateStatus(`目录已设置`);
-      await this.loadWorlds(true);
-    } catch (e) {
-      if (!isAutoLoad) alert('连接服务器失败');
-      this.updateStatus('连接服务器失败');
-    } finally {
-      this.showLoading(false);
-      this.isLoading = false;
     }
   }
 
@@ -939,54 +992,31 @@ class XaeroMapViewer {
     try {
       const coordsStr = toLoad.map(r => `${r.x},${r.z}`).join(';');
       const currentLod = this.renderer.getCurrentLodLevel();
-      const bounds = this.renderer.getViewportBounds();
-      let url = `${API_BASE}/batch-regions?requestId=${requestId}&world=${encodeURIComponent(this.currentWorld!)}&dim=${encodeURIComponent(this.currentDim!)}&coords=${encodeURIComponent(coordsStr)}&lod=${currentLod}&viewStartX=${bounds.startX}&viewStartZ=${bounds.startZ}&viewEndX=${bounds.endX}&viewEndZ=${bounds.endZ}`;
+      
+      const payload: any = {
+        world: this.currentWorld,
+        dim: this.currentDim,
+        coords: coordsStr,
+        lod: currentLod
+      };
+      
       if (this.currentMapType) {
-        url += `&mapType=${encodeURIComponent(this.currentMapType)}`;
+        payload.mapType = this.currentMapType;
       }
       if (this.currentCaveMode > 0) {
-        url += `&caveMode=${this.currentCaveMode}`;
+        payload.caveMode = this.currentCaveMode;
         if (this.currentCaveMode === 1) {
-          url += `&caveStart=${this.currentCaveStart}`;
+          payload.caveStart = this.currentCaveStart;
         }
       }
       
-      const response = await fetch(url, { signal });
-      if (!response.ok) {
-        for (const r of toLoad) {
-          this.loadingRegions.delete(`${r.x},${r.z}`);
-        }
-        return;
-      }
-      
-      const buffer = await response.arrayBuffer();
-      const view = new DataView(buffer);
-      
-      const totalRegions = view.getUint32(0, true);
-      const lodValue = view.getUint32(4, true);
-      let offset = 8;
-      
-      const regions: { rx: number; rz: number; pixelData: Uint8Array }[] = [];
-      
-      for (let i = 0; i < totalRegions; i++) {
-        const rx = view.getInt32(offset, true);
-        const rz = view.getInt32(offset + 4, true);
-        const pixelSize = view.getUint32(offset + 8, true);
-        offset += 12;
-        
-        if (pixelSize > 0) {
-          const pixelData = new Uint8Array(buffer.slice(offset, offset + pixelSize));
-          regions.push({ rx, rz, pixelData });
-        }
-        
-        offset += pixelSize;
-      }
+      const results = await this.sendWsRequestWithRetry('batch-regions', payload, requestId);
       
       if (requestId !== this.currentRequestId) {
         return;
       }
       
-      this.processRegionsBatch(regions, lodValue, requestId);
+      this.processRegionsBatch(results.regions, results.lod, requestId);
     } catch (e: unknown) {
       if (e instanceof Error && e.name === 'AbortError') {
         return;
@@ -1062,6 +1092,147 @@ class XaeroMapViewer {
         <div>LOD: ${lodLevel}</div>
         <div>并发加载: ${this.concurrentLoads}</div>
       `;
+    }
+  }
+
+  private connectWebSocket(): void {
+    if (this.wsReconnectTimeout) {
+      clearTimeout(this.wsReconnectTimeout);
+      this.wsReconnectTimeout = null;
+    }
+
+    try {
+      this.ws = new WebSocket(WS_BASE);
+      this.ws.binaryType = 'arraybuffer';
+      
+      this.ws.onopen = () => {
+        this.wsConnected = true;
+        console.log('WebSocket connected');
+        this.loadCachedDirectory();
+      };
+      
+      this.ws.onclose = () => {
+        this.wsConnected = false;
+        console.log('WebSocket disconnected, reconnecting...');
+        this.wsReconnectTimeout = setTimeout(() => this.connectWebSocket(), 3000);
+      };
+      
+      this.ws.onerror = (e) => {
+        console.error('WebSocket error:', e);
+      };
+      
+      this.ws.onmessage = (event) => {
+        try {
+          if (event.data instanceof ArrayBuffer) {
+            this.handleWsBinaryMessage(event.data);
+          } else {
+            const msg = JSON.parse(event.data);
+            this.handleWsMessage(msg);
+          }
+        } catch (e) {
+          console.error('Failed to parse WebSocket message:', e);
+        }
+      };
+    } catch (e) {
+      console.error('Failed to create WebSocket:', e);
+      this.wsReconnectTimeout = setTimeout(() => this.connectWebSocket(), 3000);
+    }
+  }
+
+  private handleWsMessage(msg: any): void {
+    const { type, requestId, error } = msg;
+    
+    if (type === 'error' && requestId && error) {
+      const pending = this.pendingWsRequests.get(requestId);
+      if (pending) {
+        this.pendingWsRequests.delete(requestId);
+        pending.reject(new Error(error));
+      }
+    }
+  }
+
+  private handleWsBinaryMessage(buffer: ArrayBuffer): void {
+    const view = new DataView(buffer);
+    const requestId = view.getUint32(0, true);
+    const totalRegions = view.getUint32(4, true);
+    const lodValue = view.getUint32(8, true);
+    
+    const pending = this.pendingWsRequests.get(requestId);
+    if (!pending) return;
+    
+    if (totalRegions === 0) {
+      this.pendingWsRequests.delete(requestId);
+      pending.resolve({ regions: [], lod: lodValue });
+      return;
+    }
+    
+    const regions: { rx: number; rz: number; pixelData: Uint8Array }[] = [];
+    let offset = 12;
+    
+    for (let i = 0; i < totalRegions; i++) {
+      const rx = view.getInt32(offset, true);
+      const rz = view.getInt32(offset + 4, true);
+      const pixelSize = view.getUint32(offset + 8, true);
+      offset += 12;
+      
+      if (pixelSize > 0) {
+        const pixelData = new Uint8Array(buffer.slice(offset, offset + pixelSize));
+        regions.push({ rx, rz, pixelData });
+      }
+      
+      offset += pixelSize;
+    }
+    
+    this.pendingWsRequests.delete(requestId);
+    pending.resolve({ regions, lod: lodValue });
+  }
+
+  private async sendWsRequest(type: string, payload: any, existingRequestId?: number): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.ws || !this.wsConnected) {
+        reject(new Error('WebSocket not connected'));
+        return;
+      }
+
+      const requestId = existingRequestId ?? ++this.currentRequestId;
+      this.pendingWsRequests.set(requestId, { resolve, reject });
+      
+      const msg = JSON.stringify({ type, requestId, payload });
+      this.ws.send(msg);
+      
+      setTimeout(() => {
+        if (this.pendingWsRequests.has(requestId)) {
+          this.pendingWsRequests.delete(requestId);
+          reject(new Error('Request timeout'));
+        }
+      }, 30000);
+    });
+  }
+
+  private async sendWsRequestWithRetry(type: string, payload: any, existingRequestId?: number, maxRetries: number = 3): Promise<any> {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (!this.wsConnected) {
+        await new Promise<void>(resolve => {
+          const checkInterval = setInterval(() => {
+            if (this.wsConnected) {
+              clearInterval(checkInterval);
+              resolve();
+            }
+          }, 100);
+          
+          setTimeout(() => {
+            clearInterval(checkInterval);
+            resolve();
+          }, 5000);
+        });
+      }
+      
+      try {
+        return await this.sendWsRequest(type, payload, existingRequestId);
+      } catch (e) {
+        if (attempt === maxRetries - 1) throw e;
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
     }
   }
 }
