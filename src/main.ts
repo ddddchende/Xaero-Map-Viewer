@@ -937,18 +937,20 @@ class XaeroMapViewer {
   }
 
   private processRegionsBatch(regions: { rx: number; rz: number; pixelData: Uint8Array }[], lod: number, requestId: number): void {
-    const BATCH_SIZE = 4;
+    const BATCH_BUDGET_MS = 8;
     let index = 0;
     
     const processNext = () => {
       if (requestId !== this.currentRequestId) return;
+      const start = performance.now();
       
-      const end = Math.min(index + BATCH_SIZE, regions.length);
-      
-      for (; index < end; index++) {
+      while (index < regions.length) {
         const { rx, rz, pixelData } = regions[index];
         this.renderer.addRegionPixels(rx, rz, pixelData, lod);
         this.regionAccessTime.set(`${rx},${rz}`, Date.now());
+        index++;
+        
+        if (performance.now() - start > BATCH_BUDGET_MS) break;
       }
       
       this.renderer.render();
