@@ -12,6 +12,7 @@ import Database from 'better-sqlite3';
 import zlib from 'zlib';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
+import { LRUCache } from './lru-cache.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -114,9 +115,7 @@ loadUserConfig();
 const MAX_MEMORY_CACHE_ENTRIES = maxMemoryCacheEntries;
 const MAX_CONCURRENT_LOADS = maxConcurrentLoads;
 const MAX_BATCH_REGIONS = maxBatchRegions;
-const pixelCache = new Map();
-const pixelCacheOrder = [];
-const pixelCacheIndex = new Map();
+const pixelCache = new LRUCache(MAX_MEMORY_CACHE_ENTRIES);
 const dbStatements = {};
 
 const NUM_WORKERS = Math.max(1, Math.min(cpus().length - 1, 4));
@@ -278,18 +277,8 @@ function runWorkerTask(dimPath, regionX, regionZ, caveMode, caveStart, lod, prio
   });
 }
 
-function pruneMemoryCache() {
-  while (pixelCacheOrder.length > MAX_MEMORY_CACHE_ENTRIES) {
-    const oldestKey = pixelCacheOrder.shift();
-    pixelCache.delete(oldestKey);
-    pixelCacheIndex.delete(oldestKey);
-  }
-}
-
 function clearMemoryCache() {
   pixelCache.clear();
-  pixelCacheOrder.length = 0;
-  pixelCacheIndex.clear();
 }
 
 async function ensureCacheDir() {
@@ -364,19 +353,12 @@ function getCacheKey(dimPath, regionX, regionZ, yHeight = null, lod = 0) {
 async function readPixelCache(dimPath, regionX, regionZ, yHeight = null, lod = 0) {
   const key = getCacheKey(dimPath, regionX, regionZ, yHeight, lod);
   
-  if (pixelCache.has(key)) {
-    const cached = pixelCache.get(key);
+  const cached = pixelCache.get(key);
+  if (cached !== null) {
     if (cached && cached.length > 0) {
-      const idx = pixelCacheIndex.get(key);
-      if (idx !== undefined && idx < pixelCacheOrder.length && pixelCacheOrder[idx] === key) {
-        pixelCacheOrder[idx] = null;
-      }
-      pixelCacheOrder.push(key);
-      pixelCacheIndex.set(key, pixelCacheOrder.length - 1);
       return cached;
     }
     pixelCache.delete(key);
-    pixelCacheIndex.delete(key);
   }
   
   if (db && dbStatements.read) {
@@ -389,10 +371,6 @@ async function readPixelCache(dimPath, regionX, regionZ, yHeight = null, lod = 0
           return null;
         }
         pixelCache.set(key, data);
-        pixelCacheOrder.push(key);
-        pixelCacheIndex.set(key, pixelCacheOrder.length - 1);
-        pruneMemoryCache();
-        
         return data;
       } else if (row) {
         dbStatements.delete.run(key);
@@ -413,9 +391,6 @@ async function writePixelCache(dimPath, regionX, regionZ, pixels, yHeight = null
   
   const key = getCacheKey(dimPath, regionX, regionZ, yHeight, lod);
   pixelCache.set(key, pixels);
-  pixelCacheOrder.push(key);
-  pixelCacheIndex.set(key, pixelCacheOrder.length - 1);
-  pruneMemoryCache();
   
   if (db && dbStatements.write) {
     try {
@@ -1280,7 +1255,6 @@ app.get('/api/cache-size', async (req, res) => {
 app.delete('/api/cache-directory', async (req, res) => {
   try {
     pixelCache.clear();
-    pixelCacheOrder.length = 0;
     
     if (db) {
       db.exec('DELETE FROM region_cache');
@@ -1491,7 +1465,6 @@ app.get('/api/batch-regions', async (req, res) => {
     }
     
     cancelledRequests.delete(requestId);
-    pruneMemoryCache();
     
     let totalSize = 4 + 4;
     for (let i = 0; i < totalRegions; i++) {
@@ -1522,7 +1495,6 @@ app.get('/api/batch-regions', async (req, res) => {
     }
     
     results.length = 0;
-    pruneMemoryCache();
     if (global.gc) global.gc();
     
     req.off('close', cancelHandler);
@@ -2186,7 +2158,6 @@ async function handleWsMessage(ws, msg) {
       }
       
       results.length = 0;
-      pruneMemoryCache();
       if (global.gc) global.gc();
       
       ws.send(buffer);

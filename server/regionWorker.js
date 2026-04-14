@@ -4,40 +4,25 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import zlib from 'zlib';
+import { LRUCache } from './lru-cache.js';
 
 const BLOCK_COLORS = workerData?.blockColors || {};
 const BIOME_COLORS = workerData?.biomeColors || {};
 const DEFAULT_BIOME = { grass: 0x91bd59, foliage: 0x77ab2f, water: 0x3f76e4 };
 
 const MAX_HEIGHT_CACHE = 256;
-const heightCache = new Map();
-const heightCacheOrder = [];
+const heightCache = new LRUCache(MAX_HEIGHT_CACHE);
 
 function getHeightCacheKey(dimPath, regionX, regionZ, lod) {
   return `${dimPath}:${regionX},${regionZ}:lod${lod}`;
 }
 
 function getCachedHeight(key) {
-  if (heightCache.has(key)) {
-    const idx = heightCacheOrder.indexOf(key);
-    if (idx !== -1) {
-      heightCacheOrder.splice(idx, 1);
-      heightCacheOrder.push(key);
-    }
-    return heightCache.get(key);
-  }
-  return null;
+  return heightCache.get(key);
 }
 
 function setCachedHeight(key, heights) {
-  if (heightCache.size >= MAX_HEIGHT_CACHE) {
-    const oldestKey = heightCacheOrder.shift();
-    if (oldestKey) {
-      heightCache.delete(oldestKey);
-    }
-  }
   heightCache.set(key, heights);
-  heightCacheOrder.push(key);
 }
 
 let currentTaskCancelled = false;
