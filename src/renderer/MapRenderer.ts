@@ -22,6 +22,7 @@ const DEFAULT_OPTIONS: RenderOptions = {
 };
 
 const REGION_SIZE = 512;
+const MAX_ATLASES = 128;
 
 const VERTEX_SHADER = `
 attribute vec4 a_data;
@@ -518,7 +519,7 @@ export class MapRenderer {
 
   clearAllRegions(): void {
     for (const atlas of this.atlases) {
-      atlas.freeSlots = Array.from({ length: 64 }, (_, i) => i);
+      atlas.freeSlots = Array.from({ length: this.slotsPerAtlas }, (_, i) => i);
     }
     this.regionSlots.clear();
     this.loadedRegionKeys.clear();
@@ -622,12 +623,27 @@ export class MapRenderer {
         return alloc;
       }
     }
-    
-    this.createAtlas();
-    const slotIndex = this.atlases[this.atlases.length - 1].freeSlots.pop()!;
-    const alloc: SlotAllocation = { atlasIndex: this.atlases.length - 1, slotIndex };
-    this.regionSlots.set(key, alloc);
-    return alloc;
+
+    if (this.atlases.length < MAX_ATLASES) {
+      this.createAtlas();
+      const slotIndex = this.atlases[this.atlases.length - 1].freeSlots.pop()!;
+      const alloc: SlotAllocation = { atlasIndex: this.atlases.length - 1, slotIndex };
+      this.regionSlots.set(key, alloc);
+      return alloc;
+    }
+
+    if (!this.evictOldestSlot()) return null;
+
+    for (let i = 0; i < this.atlases.length; i++) {
+      if (this.atlases[i].freeSlots.length > 0) {
+        const slotIndex = this.atlases[i].freeSlots.pop()!;
+        const alloc: SlotAllocation = { atlasIndex: i, slotIndex };
+        this.regionSlots.set(key, alloc);
+        return alloc;
+      }
+    }
+
+    return null;
   }
 
   private createAtlas(): void {
@@ -647,6 +663,28 @@ export class MapRenderer {
     }
     
     this.atlases.push({ texture, freeSlots });
+  }
+
+  private evictOldestSlot(): boolean {
+    let oldestKey = '';
+    let oldestTime = Infinity;
+    for (const [key, time] of this.slotLastAccess) {
+      if (time < oldestTime) {
+        oldestTime = time;
+        oldestKey = key;
+      }
+    }
+    if (!oldestKey) return false;
+
+    const slot = this.regionSlots.get(oldestKey);
+    if (slot) {
+      this.atlases[slot.atlasIndex].freeSlots.push(slot.slotIndex);
+      this.regionSlots.delete(oldestKey);
+    }
+    this.slotLastAccess.delete(oldestKey);
+    this.loadedRegionKeys.delete(oldestKey);
+    this.regionLodLevels.delete(oldestKey);
+    return true;
   }
 
   private uploadToAtlas(slot: SlotAllocation, pixelData: Uint8Array): void {
