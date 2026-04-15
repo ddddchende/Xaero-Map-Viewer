@@ -1,10 +1,11 @@
 import { MapRenderer, ViewportBounds } from './renderer/MapRenderer';
+import type { Waypoint } from './core/types';
 
-const STORAGE_KEY_SUBDIR = 'xaero_map_subdir';
 const STORAGE_KEY_SERVER = 'xaero_map_server';
 const STORAGE_KEY_MAP_STATE = 'xaero_map_state';
 const STORAGE_KEY_SECTIONS = 'xaero_map_sections';
 const STORAGE_KEY_CONCURRENT = 'xaero_map_concurrent';
+const STORAGE_KEY_SHOW_WAYPOINTS = 'xaero_map_show_waypoints';
 const DEFAULT_CONCURRENT_LOADS = 256;
 
 function getDefaultServer(): string {
@@ -40,7 +41,6 @@ class XaeroMapViewer {
   private loadingRegions: Set<string> = new Set();
   private mapTypes: {name: string, path: string}[] = [];
   private regionAccessTime: Map<string, number> = new Map();
-  private isLoading: boolean = false;
   private abortController: AbortController | null = null;
   private savedMapState: MapState | null = null;
   private cacheSizeTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -51,6 +51,8 @@ class XaeroMapViewer {
   private wsConnected: boolean = false;
   private wsReconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private pendingWsRequests: Map<number, { resolve: Function; reject: Function }> = new Map();
+  private waypoints: Waypoint[] = [];
+  private showWaypoints: boolean = true;
 
   constructor() {
     this.loadServerConfig();
@@ -146,7 +148,7 @@ class XaeroMapViewer {
     }
     this.connectWebSocket();
     
-    this.loadSubdirectories();
+    this.loadCachedDirectory();
   }
 
   private startAutoLoad(): void {
@@ -158,123 +160,7 @@ class XaeroMapViewer {
   }
 
   private loadCachedDirectory(): void {
-    this.loadSubdirectories();
-  }
-
-  private async loadSubdirectories(): Promise<void> {
-    try {
-      const response = await fetch(`${API_BASE}/map-subdirectories`);
-      if (!response.ok) {
-        const error = await response.json();
-        this.updateStatus(error.error || '获取子目录列表失败');
-        return;
-      }
-      
-      const data = await response.json();
-      const selector = document.getElementById('dirSelector') as HTMLSelectElement;
-      if (!selector) return;
-      
-      selector.innerHTML = '';
-      
-      if (data.subdirectories.length === 0) {
-        const option = document.createElement('option');
-        option.value = '';
-        option.textContent = '无可用子目录';
-        selector.appendChild(option);
-        this.updateStatus('基础目录下无子目录');
-        return;
-      }
-      
-      for (const subDir of data.subdirectories) {
-        const option = document.createElement('option');
-        option.value = subDir;
-        option.textContent = subDir;
-        selector.appendChild(option);
-      }
-      
-      const cachedSubDir = localStorage.getItem(STORAGE_KEY_SUBDIR);
-      const subDirExists = cachedSubDir && data.subdirectories.includes(cachedSubDir);
-      
-      if (subDirExists) {
-        selector.value = cachedSubDir!;
-        await this.setMapSubdirectory(cachedSubDir!, true);
-      } else if (data.subdirectories.length > 0) {
-        selector.value = data.subdirectories[0];
-        await this.setMapSubdirectory(data.subdirectories[0], true);
-      } else {
-        this.checkServerConnection();
-      }
-    } catch {
-      this.updateStatus('连接服务器失败');
-    }
-  }
-
-  private async setMapSubdirectory(subdirectory: string, isAutoLoad: boolean): Promise<void> {
-    if (!subdirectory) {
-      if (!isAutoLoad) alert('请选择地图子目录');
-      return;
-    }
-    
-    if (this.isLoading) return;
-    this.isLoading = true;
-    
-    this.cancelServerRequest();
-    
-    if (this.abortController) {
-      this.abortController.abort();
-    }
-    this.abortController = new AbortController();
-    
-    this.currentWorld = null;
-    this.currentDim = null;
-    this.currentMapType = null;
-    this.allRegions = [];
-    this.allRegionSet.clear();
-    this.loadingRegions.clear();
-    this.regionAccessTime.clear();
-    this.mapTypes = [];
-    
-    this.renderer.clearAllRegions();
-    
-    this.showLoading(true);
-    this.updateStatus('正在设置目录...');
-    
-    try {
-      const response = await fetch(`${API_BASE}/set-map-subdirectory`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subdirectory })
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        if (!isAutoLoad) alert(error.error || '设置目录失败');
-        this.updateStatus('目录设置失败');
-        return;
-      }
-      
-      localStorage.setItem(STORAGE_KEY_SUBDIR, subdirectory);
-      this.updateStatus(`目录已设置: ${subdirectory}`);
-      this.loadCacheSize();
-      await this.loadWorlds(true);
-    } catch (e) {
-      if (!isAutoLoad) alert('连接服务器失败');
-      this.updateStatus('连接服务器失败');
-    } finally {
-      this.showLoading(false);
-      this.isLoading = false;
-    }
-  }
-
-  private async checkServerConnection(): Promise<void> {
-    try {
-      const response = await fetch(`${API_BASE}/worlds`);
-      if (response.ok || response.status === 400) {
-        this.updateStatus('已连接到服务器');
-      }
-    } catch {
-      this.updateStatus('无法连接服务器，请检查地址');
-    }
+    this.loadWorlds();
   }
 
   private setupUI(): void {
@@ -283,7 +169,6 @@ class XaeroMapViewer {
     const mapTypeSelector = document.getElementById('mapTypeSelector') as HTMLSelectElement;
     const zoomSlider = document.getElementById('zoomSlider') as HTMLInputElement;
     const gotoBtn = document.getElementById('gotoCoords') as HTMLButtonElement;
-    const dirSelector = document.getElementById('dirSelector') as HTMLSelectElement;
     const setServerBtn = document.getElementById('setServerBtn') as HTMLButtonElement;
     const serverInput = document.getElementById('serverInput') as HTMLInputElement;
     const toggleSidebar = document.getElementById('toggleSidebar');
@@ -298,7 +183,6 @@ class XaeroMapViewer {
       this.renderer.setScale(Math.pow(2, value));
     });
     gotoBtn?.addEventListener('click', () => this.handleGotoCoords());
-    dirSelector?.addEventListener('change', () => this.setMapSubdirectory(dirSelector.value, false));
     setServerBtn?.addEventListener('click', () => this.setServerAddress(serverInput.value));
     
     toggleSidebar?.addEventListener('click', () => {
@@ -368,7 +252,116 @@ class XaeroMapViewer {
     this.loadCacheDirectory();
     this.loadCacheSize();
     
+    this.loadWaypointSettings();
+    this.setupWaypointUI();
+    
     this.showLoading(false);
+  }
+
+  private loadWaypointSettings(): void {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SHOW_WAYPOINTS);
+      if (saved !== null) {
+        this.showWaypoints = saved === 'true';
+      }
+    } catch {}
+    this.renderer.setShowWaypoints(this.showWaypoints);
+    const showWaypointsCheckbox = document.getElementById('showWaypoints') as HTMLInputElement;
+    if (showWaypointsCheckbox) {
+      showWaypointsCheckbox.checked = this.showWaypoints;
+    }
+  }
+
+  private setupWaypointUI(): void {
+    const showWaypointsCheckbox = document.getElementById('showWaypoints') as HTMLInputElement;
+    showWaypointsCheckbox?.addEventListener('change', (e) => {
+      this.showWaypoints = (e.target as HTMLInputElement).checked;
+      this.renderer.setShowWaypoints(this.showWaypoints);
+      localStorage.setItem(STORAGE_KEY_SHOW_WAYPOINTS, String(this.showWaypoints));
+    });
+
+    const refreshWaypointsBtn = document.getElementById('refreshWaypoints') as HTMLButtonElement;
+    refreshWaypointsBtn?.addEventListener('click', () => this.loadWaypoints());
+
+    this.renderer.setOnWaypointClick((waypoint) => this.handleWaypointClick(waypoint));
+  }
+
+  private async loadWaypoints(): Promise<void> {
+    if (!this.currentWorld) return;
+    
+    try {
+      const dimName = this.currentDim || 'null';
+      let dimParam = dimName;
+      if (dimName === 'null' || dimName === 'overworld') dimParam = 'null';
+      else if (dimName === 'DIM-1' || dimName.toLowerCase().includes('nether')) dimParam = 'DIM-1';
+      else if (dimName === 'DIM1' || dimName.toLowerCase().includes('end')) dimParam = 'DIM1';
+      
+      const response = await fetch(`${API_BASE}/waypoints/server/${encodeURIComponent(this.currentWorld)}/${encodeURIComponent(dimParam)}`);
+      if (response.ok) {
+        const data = await response.json();
+        this.waypoints = data.waypoints || [];
+        this.renderer.setWaypoints(this.waypoints);
+        this.updateWaypointCount();
+        this.updateWaypointList();
+      }
+    } catch (e) {
+      console.error('Failed to load waypoints:', e);
+    }
+  }
+
+  private updateWaypointCount(): void {
+    const countEl = document.getElementById('waypointCount');
+    if (countEl) {
+      const activeCount = this.waypoints.filter(w => !w.disabled).length;
+      countEl.textContent = `${activeCount}/${this.waypoints.length}`;
+    }
+  }
+
+  private updateWaypointList(): void {
+    const listEl = document.getElementById('waypointList');
+    if (!listEl) return;
+
+    listEl.innerHTML = '';
+
+    const sortedWaypoints = [...this.waypoints].sort((a, b) => {
+      if (a.disabled !== b.disabled) return a.disabled ? 1 : -1;
+      return a.name.localeCompare(b.name);
+    });
+
+    for (const waypoint of sortedWaypoints.slice(0, 20)) {
+      const item = document.createElement('div');
+      item.className = 'waypoint-item' + (waypoint.disabled ? ' disabled' : '');
+      
+      const color = waypoint.color;
+      const r = (color >> 16) & 0xFF;
+      const g = (color >> 8) & 0xFF;
+      const b = color & 0xFF;
+
+      item.innerHTML = `
+        <div class="waypoint-color" style="background-color: rgb(${r}, ${g}, ${b})">${waypoint.symbol}</div>
+        <div class="waypoint-info">
+          <div class="waypoint-name">${waypoint.name}</div>
+          <div class="waypoint-coords">X: ${waypoint.x}, Y: ${waypoint.y}, Z: ${waypoint.z}</div>
+        </div>
+      `;
+
+      item.addEventListener('click', () => {
+        this.renderer.centerOn(waypoint.x, waypoint.z);
+      });
+
+      listEl.appendChild(item);
+    }
+
+    if (this.waypoints.length > 20) {
+      const moreItem = document.createElement('div');
+      moreItem.className = 'waypoint-more';
+      moreItem.textContent = `还有 ${this.waypoints.length - 20} 个路径点...`;
+      listEl.appendChild(moreItem);
+    }
+  }
+
+  private handleWaypointClick(waypoint: Waypoint): void {
+    this.renderer.centerOn(waypoint.x, waypoint.z);
   }
 
   private setupSectionToggle(): void {
@@ -531,7 +524,7 @@ class XaeroMapViewer {
     }
   }
 
-  private async loadWorlds(autoSelect: boolean = false): Promise<void> {
+  private async loadWorlds(): Promise<void> {
     try {
       const response = await fetch(`${API_BASE}/worlds`);
       const worlds: string[] = await response.json();
@@ -566,17 +559,14 @@ class XaeroMapViewer {
       
       if (savedWorldExists) {
         selector.value = savedWorld!;
-        await this.handleWorldChange(true);
-      } else if (autoSelect && worlds.length >= 1) {
-        selector.value = worlds[0];
-        await this.handleWorldChange(true);
       }
+      await this.handleWorldChange();
     } catch (e) {
       console.error('Failed to load worlds:', e);
     }
   }
 
-  private async handleWorldChange(autoSelect: boolean = false): Promise<void> {
+  private async handleWorldChange(): Promise<void> {
     if (this.abortController) {
       this.abortController.abort();
     }
@@ -626,7 +616,7 @@ class XaeroMapViewer {
       if (savedDimExists) {
         dimSelector.value = savedDim!;
         await this.handleDimChange();
-      } else if (autoSelect || dimensions.length === 1) {
+      } else {
         const overworld = dimensions.find(d => d.path === 'null' || d.name.includes('主世界') || d.name === 'Overworld');
         const toSelect = overworld || dimensions[0];
         dimSelector.value = toSelect.path;
@@ -753,6 +743,8 @@ class XaeroMapViewer {
         this.currentMapType = defaultMap.path;
         await this.loadRegionList();
       }
+      
+      this.loadWaypoints();
     } catch (e: unknown) {
       if (e instanceof Error && e.name === 'AbortError') {
         return;

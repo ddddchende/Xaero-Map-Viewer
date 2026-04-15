@@ -30,7 +30,6 @@ app.use(compression({ level: 9, threshold: 1024 }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../dist')));
 
-let baseMapDirectory = '';
 let mapDirectory = '';
 let cacheDirectory = path.join(__dirname, 'cache');
 let db = null;
@@ -69,10 +68,8 @@ function loadUserConfig() {
       if (config.cacheDirectory) {
         cacheDirectory = config.cacheDirectory;
       }
-      if (config.selectedSubDir && baseMapDirectory) {
-        mapDirectory = path.join(baseMapDirectory, config.selectedSubDir);
-      }
-    } else {
+    }
+    if (!existsSync(USER_CONFIG_FILE)) {
       saveUserConfig();
     }
   } catch (e) {
@@ -83,13 +80,9 @@ function loadUserConfig() {
 
 function saveUserConfig() {
   try {
-    const config = {
+    writeFileSync(USER_CONFIG_FILE, JSON.stringify({
       cacheDirectory
-    };
-    if (baseMapDirectory && mapDirectory && mapDirectory.startsWith(baseMapDirectory)) {
-      config.selectedSubDir = path.relative(baseMapDirectory, mapDirectory);
-    }
-    writeFileSync(USER_CONFIG_FILE, JSON.stringify(config, null, 2));
+    }, null, 2));
   } catch (e) {
     console.log('Failed to save user config:', e.message);
   }
@@ -100,7 +93,7 @@ function loadServerConfig() {
     if (existsSync(SERVER_CONFIG_FILE)) {
       const config = JSON.parse(readFileSync(SERVER_CONFIG_FILE, 'utf-8'));
       if (config.mapDirectory) {
-        baseMapDirectory = config.mapDirectory;
+        mapDirectory = config.mapDirectory;
       }
       if (config.maxCacheEntries) {
         maxMemoryCacheEntries = config.maxCacheEntries;
@@ -123,7 +116,7 @@ function loadServerConfig() {
 function saveServerConfig() {
   try {
     writeFileSync(SERVER_CONFIG_FILE, JSON.stringify({
-      mapDirectory: baseMapDirectory,
+      mapDirectory,
       maxCacheEntries: maxMemoryCacheEntries,
       maxConcurrentLoads,
       maxBatchRegions
@@ -910,70 +903,6 @@ function renderCaveLayersToPixelsLocal(layers) {
   return renderCaveLayersToPixels(layers, BLOCK_COLORS, BIOME_COLORS, 0);
 }
 
-app.get('/api/map-subdirectories', async (req, res) => {
-  if (!baseMapDirectory) {
-    return res.status(400).json({ error: '未配置地图基础目录，请在 server_config.json 中设置 mapDirectory' });
-  }
-  
-  if (!existsSync(baseMapDirectory)) {
-    return res.status(400).json({ error: '地图基础目录不存在', path: baseMapDirectory });
-  }
-  
-  try {
-    const entries = await readdir(baseMapDirectory, { withFileTypes: true });
-    const subDirs = [];
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        subDirs.push(entry.name);
-      }
-    }
-    subDirs.sort();
-    res.json({ baseDirectory: baseMapDirectory, subdirectories: subDirs });
-  } catch (error) {
-    res.status(500).json({ error: `读取目录失败: ${error.message}` });
-  }
-});
-
-app.post('/api/set-map-subdirectory', async (req, res) => {
-  const { subdirectory } = req.body;
-  
-  if (!baseMapDirectory) {
-    return res.status(400).json({ error: '未配置地图基础目录，请在 server_config.json 中设置 mapDirectory' });
-  }
-  
-  if (!subdirectory) {
-    return res.status(400).json({ error: '请提供子目录名称' });
-  }
-  
-  const fullDir = path.join(baseMapDirectory, subdirectory);
-  
-  if (!existsSync(fullDir)) {
-    return res.status(400).json({ error: '子目录不存在', path: fullDir });
-  }
-  
-  mapDirectory = fullDir;
-  initDatabase(fullDir);
-  saveUserConfig();
-  res.json({ success: true, directory: fullDir, subdirectory });
-});
-
-app.post('/api/set-directory', async (req, res) => {
-  const { directory } = req.body;
-  
-  if (!directory) {
-    return res.status(400).json({ error: '请提供目录路径' });
-  }
-  
-  if (!existsSync(directory)) {
-    return res.status(400).json({ error: '目录不存在', path: directory });
-  }
-  
-  mapDirectory = directory;
-  initDatabase(directory);
-  saveUserConfig();
-  res.json({ success: true, directory });
-});
-
 app.post('/api/set-cache-directory', async (req, res) => {
   const { directory } = req.body;
   
@@ -1040,13 +969,12 @@ app.get('/api/worlds', async (req, res) => {
   }
   
   try {
-    const structure = await detectDirectoryStructure(mapDirectory);
-    if (structure === 'world') {
-      res.json(['当前世界']);
-    } else {
-      const worlds = await listWorlds(mapDirectory);
-      res.json(worlds);
+    const worldMapPath = path.join(mapDirectory, 'world-map');
+    if (!existsSync(worldMapPath)) {
+      return res.json([]);
     }
+    const worlds = await listWorlds(worldMapPath);
+    res.json(worlds);
   } catch (error) {
     res.status(500).json({ error: String(error) });
   }
@@ -1055,9 +983,8 @@ app.get('/api/worlds', async (req, res) => {
 app.get('/api/worlds/:worldName/dimensions', async (req, res) => {
   const { worldName } = req.params;
   try {
-    let basePath = mapDirectory;
-    if (worldName !== '当前世界') basePath = path.join(mapDirectory, worldName);
-    const dimensions = await listDimensions(basePath);
+    const worldMapPath = path.join(mapDirectory, 'world-map', worldName);
+    const dimensions = await listDimensions(worldMapPath);
     res.json(dimensions);
   } catch (error) {
     res.status(500).json({ error: String(error) });
@@ -1067,9 +994,7 @@ app.get('/api/worlds/:worldName/dimensions', async (req, res) => {
 app.get('/api/worlds/:worldName/dimensions/:dimName/map-types', async (req, res) => {
   const { worldName, dimName } = req.params;
   try {
-    let basePath = mapDirectory;
-    if (worldName !== '当前世界') basePath = path.join(mapDirectory, worldName);
-    const dimPath = path.join(basePath, dimName);
+    const dimPath = path.join(mapDirectory, 'world-map', worldName, dimName);
     const mapTypes = await listMapTypes(dimPath);
     res.json(mapTypes);
   } catch (error) {
@@ -1082,10 +1007,8 @@ app.get('/api/worlds/:worldName/dimensions/:dimName/regions', async (req, res) =
   const { mapType, caveMode, caveStart } = req.query;
   
   try {
-    let basePath = mapDirectory;
-    if (worldName !== '当前世界') basePath = path.join(mapDirectory, worldName);
-    
-    let dimPath = path.join(basePath, dimName);
+    let dimPath = path.join(mapDirectory, 'world-map', worldName, dimName);
+    console.log('Loading regions from:', dimPath, 'mapDirectory:', mapDirectory);
     if (mapType) {
       dimPath = path.join(dimPath, mapType);
     } else {
@@ -1096,8 +1019,10 @@ app.get('/api/worlds/:worldName/dimensions/:dimName/regions', async (req, res) =
     const caveModeValue = caveMode !== undefined ? parseInt(String(caveMode)) : null;
     const caveStartValue = caveStart !== undefined ? parseInt(String(caveStart)) : null;
     const regions = await listRegions(dimPath, caveModeValue, caveStartValue);
+    console.log('Found', regions.length, 'regions in', dimPath);
     res.json({ regions, mapType: mapType || null });
   } catch (error) {
+    console.error('Error loading regions:', error);
     res.status(500).json({ error: String(error) });
   }
 });
@@ -1110,10 +1035,7 @@ app.get('/api/region-pixels', async (req, res) => {
   }
   
   try {
-    let basePath = mapDirectory;
-    if (world && world !== '当前世界') basePath = path.join(mapDirectory, String(world));
-    
-    let dimPath = path.join(basePath, String(dim));
+    let dimPath = path.join(mapDirectory, 'world-map', String(world), String(dim));
     if (mapType) {
       dimPath = path.join(dimPath, String(mapType));
     } else {
@@ -1165,10 +1087,7 @@ app.get('/api/batch-regions', async (req, res) => {
   req.on('close', cancelHandler);
   
   try {
-    let basePath = mapDirectory;
-    if (world && world !== '当前世界') basePath = path.join(mapDirectory, String(world));
-    
-    let dimPath = path.join(basePath, String(dim));
+    let dimPath = path.join(mapDirectory, 'world-map', String(world), String(dim));
     if (mapType) {
       dimPath = path.join(dimPath, String(mapType));
     } else {
@@ -1432,6 +1351,288 @@ async function listRegions(dimPath, caveMode = null, caveStart = null) {
   });
 }
 
+const WAYPOINT_COLORS = [
+  0xFF0000, 0xFF8800, 0xFFFF00, 0x88FF00,
+  0x00FF00, 0x00FF88, 0x00FFFF, 0x0088FF,
+  0x0000FF, 0x8800FF, 0xFF00FF, 0xFF0088,
+  0xFFFFFF, 0x888888, 0x444444, 0x000000
+];
+
+function parseWaypointLine(line, defaultSetName = 'default') {
+  const parts = line.split(':');
+  
+  if (parts[0] === 'waypoint' && parts.length >= 9) {
+    const name = parts[1].replace(/§§/g, ':') || 'Unnamed';
+    const initials = parts[2].replace(/§§/g, ':') || '!';
+    const x = parseInt(parts[3], 10) || 0;
+    const yIncluded = parts[4] !== '~';
+    const y = yIncluded ? (parseInt(parts[4], 10) || 64) : 64;
+    const z = parseInt(parts[5], 10) || 0;
+    const colorIndex = parseInt(parts[6], 10) || 0;
+    const disabled = parts[7] === 'true';
+    const type = parseInt(parts[8], 10) || 0;
+    const setName = parts[9] || defaultSetName;
+    const rotation = parts[10] === 'true';
+    const yaw = parseInt(parts[11], 10) || 0;
+    const global = parts[12] === 'true' || parts[12] === 'GLOBAL';
+    
+    const color = WAYPOINT_COLORS[colorIndex] || WAYPOINT_COLORS[0];
+    
+    return {
+      id: `${x}_${y}_${z}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name,
+      x,
+      y,
+      z,
+      color,
+      symbol: initials.substring(0, 2),
+      type,
+      disabled,
+      rotation,
+      yaw,
+      temporary: false,
+      global,
+      setName,
+      yIncluded,
+      dimension: ''
+    };
+  }
+  
+  if (parts.length >= 6 && parts[0] !== 'sets' && parts[0] !== '#' && parts[0] !== 'slime_chunk_seed') {
+    const name = parts[0].replace(/§§/g, ':') || 'Unnamed';
+    const x = parseInt(parts[1], 10) || 0;
+    const y = parseInt(parts[2], 10) || 64;
+    const z = parseInt(parts[3], 10) || 0;
+    const colorIndex = parseInt(parts[4], 10) || 0;
+    const symbol = parts[5] || '!';
+    const type = parseInt(parts[6], 10) || 0;
+    const disabled = parts[7] === '1';
+    const rotation = parts[8] === '1';
+    const yaw = parseInt(parts[9], 10) || 0;
+    const yIncluded = parts.length > 10 ? parts[10] !== '0' : true;
+    
+    const color = WAYPOINT_COLORS[colorIndex] || WAYPOINT_COLORS[0];
+    
+    return {
+      id: `${x}_${y}_${z}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name,
+      x,
+      y,
+      z,
+      color,
+      symbol: symbol.substring(0, 2),
+      type,
+      disabled,
+      rotation,
+      yaw,
+      temporary: false,
+      global: false,
+      setName: defaultSetName,
+      yIncluded,
+      dimension: ''
+    };
+  }
+  
+  return null;
+}
+
+async function findXaeroMinimapWaypoints(xaeroPath) {
+  const servers = [];
+  
+  const minimapPath = path.join(xaeroPath, 'minimap');
+  console.log('Looking for waypoints in:', minimapPath);
+  if (!existsSync(minimapPath)) {
+    console.log('Minimap path does not exist');
+    return servers;
+  }
+  
+  try {
+    const serverEntries = await readdir(minimapPath, { withFileTypes: true });
+    console.log('Found server entries:', serverEntries.map(e => e.name));
+    for (const serverEntry of serverEntries) {
+      if (serverEntry.isDirectory()) {
+        const serverPath = path.join(minimapPath, serverEntry.name);
+        const dimensions = {};
+        
+        const dimEntries = await readdir(serverPath, { withFileTypes: true });
+        for (const dimEntry of dimEntries) {
+          if (dimEntry.isDirectory() && dimEntry.name.startsWith('dim%')) {
+            const dimPath = path.join(serverPath, dimEntry.name);
+            const dimNum = dimEntry.name.replace('dim%', '');
+            
+            let dimName;
+            if (dimNum === '0') dimName = 'null';
+            else if (dimNum === '-1') dimName = 'DIM-1';
+            else if (dimNum === '1') dimName = 'DIM1';
+            else dimName = dimEntry.name;
+            
+            const files = await readdir(dimPath);
+            const waypointFiles = files.filter(f => f.startsWith('mw$') && f.endsWith('.txt'));
+            
+            if (waypointFiles.length > 0) {
+              dimensions[dimName] = {
+                path: dimPath,
+                files: waypointFiles
+              };
+            }
+          }
+        }
+        
+        if (Object.keys(dimensions).length > 0) {
+          servers.push({
+            name: serverEntry.name,
+            path: serverPath,
+            dimensions
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.log('Error finding Xaero minimap waypoints:', e.message);
+  }
+  
+  return servers;
+}
+
+async function loadWaypointsFromXaeroFile(filePath, setName = 'default') {
+  try {
+    console.log('Loading waypoints from:', filePath);
+    const content = readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n').filter(line => line.trim());
+    console.log('Found', lines.length, 'lines in file');
+    const waypoints = [];
+    
+    for (const line of lines) {
+      const waypoint = parseWaypointLine(line.trim(), setName);
+      if (waypoint) {
+        waypoints.push(waypoint);
+      }
+    }
+    
+    console.log('Parsed', waypoints.length, 'waypoints from', filePath);
+    return waypoints;
+  } catch (e) {
+    console.log('Error loading waypoints from Xaero file:', e.message);
+    return [];
+  }
+}
+
+app.get('/api/waypoints', async (req, res) => {
+  if (!mapDirectory) {
+    return res.status(400).json({ error: '请先设置地图目录' });
+  }
+  
+  try {
+    const xaeroServers = await findXaeroMinimapWaypoints(mapDirectory);
+    res.json({ xaeroServers });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+app.get('/api/waypoints/servers', async (req, res) => {
+  if (!mapDirectory) {
+    return res.status(400).json({ error: '请先设置地图目录' });
+  }
+  
+  try {
+    const xaeroServers = await findXaeroMinimapWaypoints(mapDirectory);
+    res.json({ servers: xaeroServers });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+app.get('/api/waypoints/server/:serverName', async (req, res) => {
+  const { serverName } = req.params;
+  
+  if (!mapDirectory) {
+    return res.status(400).json({ error: '请先设置地图目录' });
+  }
+  
+  try {
+    const minimapPath = path.join(mapDirectory, 'minimap', serverName);
+    
+    if (!existsSync(minimapPath)) {
+      return res.json({ waypoints: {}, dimensions: [] });
+    }
+    
+    const dimensions = [];
+    const dimWaypoints = {};
+    
+    const dimEntries = await readdir(minimapPath, { withFileTypes: true });
+    for (const dimEntry of dimEntries) {
+      if (dimEntry.isDirectory() && dimEntry.name.startsWith('dim%')) {
+        const dimPath = path.join(minimapPath, dimEntry.name);
+        const dimNum = dimEntry.name.replace('dim%', '');
+        
+        let dimName;
+        if (dimNum === '0') dimName = 'null';
+        else if (dimNum === '-1') dimName = 'DIM-1';
+        else if (dimNum === '1') dimName = 'DIM1';
+        else dimName = dimEntry.name;
+        
+        const files = await readdir(dimPath);
+        const waypointFiles = files.filter(f => f.startsWith('mw$') && f.endsWith('.txt'));
+        
+        if (waypointFiles.length > 0) {
+          dimensions.push(dimName);
+          
+          let allWaypoints = [];
+          for (const wpFile of waypointFiles) {
+            const filePath = path.join(dimPath, wpFile);
+            const setName = wpFile.replace('.txt', '').replace('mw$', '');
+            const wps = await loadWaypointsFromXaeroFile(filePath, setName);
+            allWaypoints = allWaypoints.concat(wps);
+          }
+          dimWaypoints[dimName] = allWaypoints;
+        }
+      }
+    }
+    
+    res.json({ waypoints: dimWaypoints, dimensions });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+app.get('/api/waypoints/server/:serverName/:dimension', async (req, res) => {
+  const { serverName, dimension } = req.params;
+  
+  if (!mapDirectory) {
+    return res.status(400).json({ error: '请先设置地图目录' });
+  }
+  
+  try {
+    let dimNum;
+    if (dimension === 'null' || dimension === 'overworld') dimNum = '0';
+    else if (dimension === 'DIM-1' || dimension === 'nether') dimNum = '-1';
+    else if (dimension === 'DIM1' || dimension === 'end') dimNum = '1';
+    else dimNum = dimension.replace('dim%', '');
+    
+    const dimPath = path.join(mapDirectory, 'minimap', serverName, `dim%${dimNum}`);
+    
+    if (!existsSync(dimPath)) {
+      return res.json({ waypoints: [] });
+    }
+    
+    const files = await readdir(dimPath);
+    const waypointFiles = files.filter(f => f.startsWith('mw$') && f.endsWith('.txt'));
+    
+    let allWaypoints = [];
+    for (const wpFile of waypointFiles) {
+      const filePath = path.join(dimPath, wpFile);
+      const setName = wpFile.replace('.txt', '').replace('mw$', '');
+      const wps = await loadWaypointsFromXaeroFile(filePath, setName);
+      allWaypoints = allWaypoints.concat(wps);
+    }
+    
+    res.json({ waypoints: allWaypoints });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
@@ -1448,8 +1649,7 @@ wss.on('connection', (ws) => {
     type: 'server-config', 
     config: {
       cacheDirectory,
-      mapDirectory,
-      baseMapDirectory
+      mapDirectory
     }
   }));
   
@@ -1502,10 +1702,7 @@ async function handleWsMessage(ws, msg) {
     }
     
     try {
-      let basePath = mapDirectory;
-      if (world && world !== '当前世界') basePath = path.join(mapDirectory, world);
-      
-      let dimPath = path.join(basePath, dim);
+      let dimPath = path.join(mapDirectory, 'world-map', world, dim);
       if (mapType) {
         dimPath = path.join(dimPath, mapType);
       } else {

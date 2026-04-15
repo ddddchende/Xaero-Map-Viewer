@@ -36,13 +36,9 @@
       <div class="section" data-section="directory">
         <div class="section-title" data-toggle="directory">
           <span class="toggle-icon">▼</span>
-          <span>目录设置</span>
+          <span>缓存设置</span>
         </div>
         <div class="section-content">
-          <div class="control-group">
-            <label>地图目录</label>
-            <select id="dirSelector"></select>
-          </div>
           <div class="control-group">
             <label>缓存目录</label>
             <input type="text" id="cacheDirInput" placeholder="默认: server/cache">
@@ -123,6 +119,31 @@
             </div>
             <input type="range" id="concurrentSlider" min="16" max="512" value="256" step="1">
           </div>
+        </div>
+      </div>
+      
+      <div class="section" data-section="waypoints" id="waypointSection">
+        <div class="section-title" data-toggle="waypoints">
+          <span class="toggle-icon">▼</span>
+          <span>路径点</span>
+        </div>
+        <div class="section-content">
+          <div class="control-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="showWaypoints" checked>
+              <span>显示路径点</span>
+            </label>
+          </div>
+          <div class="control-group">
+            <div class="inline-label">
+              <label>路径点数量</label>
+              <span id="waypointCount" class="value">0</span>
+            </div>
+          </div>
+          <div class="control-group">
+            <button id="refreshWaypoints" class="btn-confirm">刷新路径点</button>
+          </div>
+          <div id="waypointList" class="waypoint-list"></div>
         </div>
       </div>
       

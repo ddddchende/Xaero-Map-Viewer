@@ -1,5 +1,6 @@
 node_modules
 \[Xaero的世界地图\] xaeroworldmap-fabric-1.21.1-1.40.8
+\[Xaero的小地图\] xaerominimap-fabric-1.21.1-25.3.7
 server/block
 server/cache
 server/config.json

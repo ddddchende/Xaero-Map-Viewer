@@ -6,7 +6,7 @@
   <title>Xaero Map Viewer - Minecraft Style</title>
   <link rel="stylesheet" href="/styles/main.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%238B5A2B' x='10' y='10' width='80' height='80'/><rect fill='%2371A033' x='10' y='10' width='80' height='20'/><rect fill='%236B4423' x='10' y='70' width='80' height='20'/></svg>">
-  <script type="module" crossorigin src="/assets/index-BJ92zj00.js"></script>
+  <script type="module" crossorigin src="/assets/index-DsXG4gNb.js"></script>
 </head>
 <body>
   <button id="toggleSidebar">☰</button>
@@ -37,13 +37,9 @@
       <div class="section" data-section="directory">
         <div class="section-title" data-toggle="directory">
           <span class="toggle-icon">▼</span>
-          <span>目录设置</span>
+          <span>缓存设置</span>
         </div>
         <div class="section-content">
-          <div class="control-group">
-            <label>地图目录</label>
-            <select id="dirSelector"></select>
-          </div>
           <div class="control-group">
             <label>缓存目录</label>
             <input type="text" id="cacheDirInput" placeholder="默认: server/cache">
@@ -124,6 +120,31 @@
             </div>
             <input type="range" id="concurrentSlider" min="16" max="512" value="256" step="1">
           </div>
+        </div>
+      </div>
+      
+      <div class="section" data-section="waypoints" id="waypointSection">
+        <div class="section-title" data-toggle="waypoints">
+          <span class="toggle-icon">▼</span>
+          <span>路径点</span>
+        </div>
+        <div class="section-content">
+          <div class="control-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="showWaypoints" checked>
+              <span>显示路径点</span>
+            </label>
+          </div>
+          <div class="control-group">
+            <div class="inline-label">
+              <label>路径点数量</label>
+              <span id="waypointCount" class="value">0</span>
+            </div>
+          </div>
+          <div class="control-group">
+            <button id="refreshWaypoints" class="btn-confirm">刷新路径点</button>
+          </div>
+          <div id="waypointList" class="waypoint-list"></div>
         </div>
       </div>
       

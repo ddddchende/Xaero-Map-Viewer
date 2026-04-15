@@ -1041,3 +1041,106 @@ input[type="range"]::-webkit-slider-thumb:hover {
   -moz-user-select: none;
   -ms-user-select: none;
 }
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--mc-grass-green);
+  cursor: pointer;
+}
+
+.checkbox-label span {
+  color: var(--mc-text-white);
+  font-size: 16px;
+}
+
+.waypoint-list {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 8px;
+  border: 2px solid;
+  border-color: var(--mc-stone-dark) var(--mc-stone-light) var(--mc-stone-light) var(--mc-stone-dark);
+  background: var(--mc-bg-dark);
+}
+
+.waypoint-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.waypoint-list::-webkit-scrollbar-track {
+  background: var(--mc-bg-dark);
+}
+
+.waypoint-list::-webkit-scrollbar-thumb {
+  background: var(--mc-stone);
+  border: 1px solid var(--mc-stone-dark);
+}
+
+.waypoint-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid rgba(139, 90, 43, 0.3);
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.waypoint-item:hover {
+  background: rgba(139, 90, 43, 0.2);
+}
+
+.waypoint-item:last-child {
+  border-bottom: none;
+}
+
+.waypoint-item.disabled {
+  opacity: 0.5;
+}
+
+.waypoint-color {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: bold;
+  color: #000;
+  border: 2px solid rgba(0, 0, 0, 0.3);
+  text-shadow: none;
+}
+
+.waypoint-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.waypoint-name {
+  font-size: 14px;
+  color: var(--mc-text-white);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.waypoint-coords {
+  font-size: 12px;
+  color: var(--mc-text-gray);
+}
+
+.waypoint-more {
+  padding: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--mc-text-gray);
+  background: rgba(0, 0, 0, 0.3);
+}

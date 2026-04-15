@@ -1,4 +1,4 @@
-import type { MapRegion, MapBlock } from '../core/types';
+import type { MapRegion, MapBlock, Waypoint } from '../core/types';
 import { getBlockColor, getBlockAlpha, isGrassBlock, isFoliageBlock, isWaterBlock } from '../data/blockColors';
 import { getGrassColor, getFoliageColor, getWaterColor } from '../data/biomeColors';
 
@@ -110,6 +110,11 @@ export class MapRenderer {
   private dataLocation: number;
   private resolutionLocation: WebGLUniformLocation;
   private textureLocation: WebGLUniformLocation;
+  
+  private waypoints: Waypoint[] = [];
+  private showWaypoints: boolean = true;
+  private hoveredWaypoint: Waypoint | null = null;
+  private onWaypointClickCallback: ((waypoint: Waypoint) => void) | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -208,6 +213,7 @@ export class MapRenderer {
     this.canvas.addEventListener('mousemove', this.handleMouseMove.bind(this));
     this.canvas.addEventListener('mouseup', this.handleMouseUp.bind(this));
     this.canvas.addEventListener('mouseleave', this.handleMouseUp.bind(this));
+    this.canvas.addEventListener('click', this.handleClick.bind(this));
     this.canvas.addEventListener('touchstart', this.handleTouchStart.bind(this), { passive: false });
     this.canvas.addEventListener('touchmove', this.handleTouchMove.bind(this), { passive: false });
     this.canvas.addEventListener('touchend', this.handleTouchEnd.bind(this));
@@ -256,6 +262,8 @@ export class MapRenderer {
     
     this.updateCoordsDisplay(worldX, worldZ);
     
+    this.checkWaypointHover(mouseX, mouseY);
+    
     if (this.isDragging) {
       const deltaX = e.clientX - this.lastMouseX;
       const deltaY = e.clientY - this.lastMouseY;
@@ -272,6 +280,12 @@ export class MapRenderer {
 
   private handleMouseUp(): void {
     this.isDragging = false;
+  }
+
+  private handleClick(_e: MouseEvent): void {
+    if (this.hoveredWaypoint && this.onWaypointClickCallback) {
+      this.onWaypointClickCallback(this.hoveredWaypoint);
+    }
   }
 
   private getTouchDistance(touches: TouchList): number {
@@ -830,6 +844,7 @@ export class MapRenderer {
     ctx.clearRect(0, 0, w, h);
     
     this.renderPendingPlaceholders(ctx, w, h);
+    this.renderWaypoints(ctx, w, h);
     
     if (this.mouseWorldX !== null && this.mouseWorldZ !== null) {
       const isNether = this.isNetherDimension();
@@ -1067,5 +1082,159 @@ export class MapRenderer {
       atlasCount: this.atlases.length,
       lodLevel: this.currentLodLevel
     };
+  }
+
+  setWaypoints(waypoints: Waypoint[]): void {
+    this.waypoints = waypoints;
+    this.scheduleRender();
+  }
+
+  getWaypoints(): Waypoint[] {
+    return this.waypoints;
+  }
+
+  setShowWaypoints(show: boolean): void {
+    this.showWaypoints = show;
+    this.scheduleRender();
+  }
+
+  isShowingWaypoints(): boolean {
+    return this.showWaypoints;
+  }
+
+  setOnWaypointClick(callback: (waypoint: Waypoint) => void): void {
+    this.onWaypointClickCallback = callback;
+  }
+
+  getHoveredWaypoint(): Waypoint | null {
+    return this.hoveredWaypoint;
+  }
+
+  private renderWaypoints(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    if (!this.showWaypoints || this.waypoints.length === 0) return;
+
+    const isNether = this.isNetherDimension();
+    const dimScale = isNether ? 8 : 1;
+
+    for (const waypoint of this.waypoints) {
+      if (waypoint.disabled) continue;
+
+      let worldX = waypoint.x;
+      let worldZ = waypoint.z;
+      
+      if (isNether) {
+        worldX = Math.floor(waypoint.x / dimScale);
+        worldZ = Math.floor(waypoint.z / dimScale);
+      }
+
+      const screenX = worldX * this.scale + this.offsetX;
+      const screenZ = worldZ * this.scale + this.offsetZ;
+
+      if (screenX < -50 || screenX > w + 50 || screenZ < -50 || screenZ > h + 50) continue;
+
+      const color = waypoint.color;
+      const r = (color >> 16) & 0xFF;
+      const g = (color >> 8) & 0xFF;
+      const b = color & 0xFF;
+      const colorStr = `rgb(${r}, ${g}, ${b})`;
+
+      const baseSize = Math.max(8, Math.min(16, 12 * this.scale));
+      const size = this.hoveredWaypoint === waypoint ? baseSize * 1.3 : baseSize;
+
+      ctx.save();
+      ctx.translate(screenX, screenZ);
+
+      ctx.beginPath();
+      ctx.moveTo(0, -size);
+      ctx.lineTo(size * 0.6, size * 0.3);
+      ctx.lineTo(0, size * 0.1);
+      ctx.lineTo(-size * 0.6, size * 0.3);
+      ctx.closePath();
+
+      ctx.fillStyle = colorStr;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(0, -size * 0.4, size * 0.25, 0, Math.PI * 2);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.stroke();
+
+      ctx.font = `bold ${Math.max(8, size * 0.5)}px "Minecraft", "Courier New", monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#000000';
+      ctx.fillText(waypoint.symbol, 0, -size * 0.4 + 1);
+      ctx.fillStyle = colorStr;
+      ctx.fillText(waypoint.symbol, 0, -size * 0.4);
+
+      if (this.hoveredWaypoint === waypoint) {
+        const name = waypoint.name;
+        ctx.font = '12px "Minecraft", "Courier New", monospace';
+        const textWidth = ctx.measureText(name).width;
+        const padding = 6;
+        const boxWidth = textWidth + padding * 2;
+        const boxHeight = 20;
+        const boxX = -boxWidth / 2;
+        const boxY = -size - boxHeight - 8;
+
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
+        ctx.strokeStyle = colorStr;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+
+        ctx.fillStyle = '#FFFFFF';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(name, 0, boxY + boxHeight / 2);
+      }
+
+      ctx.restore();
+    }
+  }
+
+  private checkWaypointHover(mouseX: number, mouseY: number): void {
+    if (!this.showWaypoints || this.waypoints.length === 0) {
+      this.hoveredWaypoint = null;
+      return;
+    }
+
+    const isNether = this.isNetherDimension();
+    const dimScale = isNether ? 8 : 1;
+    const hitRadius = Math.max(12, 16 * this.scale);
+
+    let closest: Waypoint | null = null;
+    let closestDist = Infinity;
+
+    for (const waypoint of this.waypoints) {
+      if (waypoint.disabled) continue;
+
+      let worldX = waypoint.x;
+      let worldZ = waypoint.z;
+      
+      if (isNether) {
+        worldX = Math.floor(waypoint.x / dimScale);
+        worldZ = Math.floor(waypoint.z / dimScale);
+      }
+
+      const screenX = worldX * this.scale + this.offsetX;
+      const screenZ = worldZ * this.scale + this.offsetZ;
+
+      const dx = mouseX - screenX;
+      const dz = mouseY - screenZ;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+
+      if (dist < hitRadius && dist < closestDist) {
+        closest = waypoint;
+        closestDist = dist;
+      }
+    }
+
+    this.hoveredWaypoint = closest;
   }
 }
