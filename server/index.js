@@ -43,6 +43,25 @@ let maxMemoryCacheEntries = 64;
 let maxConcurrentLoads = 32;
 let maxBatchRegions = 64;
 
+const bufferPool = [];
+const BUFFER_POOL_MAX_SIZE = 64;
+
+function getPooledBuffer(size) {
+  for (let i = 0; i < bufferPool.length; i++) {
+    if (bufferPool[i].length >= size) {
+      const buf = bufferPool.splice(i, 1)[0];
+      return buf.slice(0, size);
+    }
+  }
+  return Buffer.alloc(size);
+}
+
+function releaseBuffer(buf) {
+  if (bufferPool.length < BUFFER_POOL_MAX_SIZE) {
+    bufferPool.push(buf);
+  }
+}
+
 function loadUserConfig() {
   try {
     if (existsSync(USER_CONFIG_FILE)) {
@@ -1219,7 +1238,7 @@ app.get('/api/batch-regions', async (req, res) => {
       totalSize += 12 + (results[i] ? results[i].length : 0);
     }
     
-    const buffer = Buffer.alloc(totalSize);
+    const buffer = getPooledBuffer(totalSize);
     let offset = 0;
     
     buffer.writeUInt32LE(totalRegions, offset);
@@ -1243,11 +1262,11 @@ app.get('/api/batch-regions', async (req, res) => {
     }
     
     results.length = 0;
-    if (global.gc) global.gc();
     
     req.off('close', cancelHandler);
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Length', buffer.length);
+    res.on('finish', () => releaseBuffer(buffer));
     res.send(buffer);
   } catch (error) {
     req.off('close', cancelHandler);
@@ -1526,7 +1545,7 @@ async function handleWsMessage(ws, msg) {
         totalSize += 12 + (results[i] ? results[i].length : 0);
       }
       
-      const buffer = Buffer.alloc(totalSize);
+      const buffer = getPooledBuffer(totalSize);
       let offset = 0;
       
       buffer.writeUInt32LE(requestId, offset);
@@ -1552,9 +1571,8 @@ async function handleWsMessage(ws, msg) {
       }
       
       results.length = 0;
-      if (global.gc) global.gc();
       
-      ws.send(buffer);
+      ws.send(buffer, () => releaseBuffer(buffer));
     } catch (e) {
       console.error('WebSocket batch-regions error:', e.message);
       ws.send(JSON.stringify({ type: 'error', requestId, error: e.message }));
