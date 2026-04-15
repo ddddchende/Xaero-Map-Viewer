@@ -1,5 +1,4 @@
 import { MapRenderer, ViewportBounds } from './renderer/MapRenderer';
-import { inflateSync } from 'fflate';
 
 const STORAGE_KEY_SUBDIR = 'xaero_map_subdir';
 const STORAGE_KEY_SERVER = 'xaero_map_server';
@@ -1215,30 +1214,20 @@ class XaeroMapViewer {
     }
     
     const regions: { rx: number; rz: number; pixelData: Uint8Array }[] = [];
-    let offset = 16;
+    let offset = 12;
     
     for (let i = 0; i < totalRegions; i++) {
       const rx = view.getInt32(offset, true);
       const rz = view.getInt32(offset + 4, true);
-      const sizeAndFlags = view.getUint32(offset + 8, true);
-      const originalSize = sizeAndFlags >>> 8;
-      const isCompressed = (sizeAndFlags & 1) !== 0;
-      const compressedSize = view.getUint32(offset + 12, true);
-      offset += 16;
+      const pixelSize = view.getUint32(offset + 8, true);
+      offset += 12;
       
-      if (originalSize > 0 && compressedSize > 0) {
-        const data = new Uint8Array(buffer.slice(offset, offset + compressedSize));
-        
-        let pixelData: Uint8Array;
-        if (isCompressed) {
-          pixelData = inflateSync(data);
-        } else {
-          pixelData = data;
-        }
+      if (pixelSize > 0) {
+        const pixelData = new Uint8Array(buffer.slice(offset, offset + pixelSize));
         regions.push({ rx, rz, pixelData });
       }
       
-      offset += compressedSize;
+      offset += pixelSize;
     }
     
     this.pendingWsRequests.delete(requestId);
