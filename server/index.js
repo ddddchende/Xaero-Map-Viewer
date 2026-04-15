@@ -1540,9 +1540,34 @@ async function handleWsMessage(ws, msg) {
         })
       );
       
-      let totalSize = 12;
+      const compressedResults = [];
+      let totalSize = 16;
+      const COMPRESSION_THRESHOLD = 65536;
+      const MIN_COMPRESSION_RATIO = 0.8;
+      
       for (let i = 0; i < totalRegions; i++) {
-        totalSize += 12 + (results[i] ? results[i].length : 0);
+        if (results[i]) {
+          const resultBuffer = Buffer.isBuffer(results[i]) ? results[i] : Buffer.from(results[i]);
+          
+          let useCompressed = null;
+          if (resultBuffer.length >= COMPRESSION_THRESHOLD) {
+            const compressed = zlib.deflateRawSync(resultBuffer, { level: 1 });
+            if (compressed.length < resultBuffer.length * MIN_COMPRESSION_RATIO) {
+              useCompressed = compressed;
+            }
+          }
+          
+          if (useCompressed) {
+            compressedResults.push({ original: resultBuffer, compressed: useCompressed, isCompressed: true });
+            totalSize += 16 + useCompressed.length;
+          } else {
+            compressedResults.push({ original: resultBuffer, compressed: resultBuffer, isCompressed: false });
+            totalSize += 16 + resultBuffer.length;
+          }
+        } else {
+          compressedResults.push(null);
+          totalSize += 16;
+        }
       }
       
       const buffer = getPooledBuffer(totalSize);
@@ -1554,23 +1579,29 @@ async function handleWsMessage(ws, msg) {
       offset += 4;
       buffer.writeUInt32LE(lodValue, offset);
       offset += 4;
+      buffer.writeUInt32LE(0, offset);
+      offset += 4;
       
       for (let i = 0; i < totalRegions; i++) {
         buffer.writeInt32LE(coordPairs[i].x, offset);
         buffer.writeInt32LE(coordPairs[i].z, offset + 4);
         
-        if (results[i]) {
-          const resultBuffer = Buffer.isBuffer(results[i]) ? results[i] : Buffer.from(results[i]);
-          buffer.writeUInt32LE(resultBuffer.length, offset + 8);
-          resultBuffer.copy(buffer, offset + 12);
-          offset += 12 + resultBuffer.length;
+        if (compressedResults[i]) {
+          const { original, compressed, isCompressed } = compressedResults[i];
+          const flags = isCompressed ? 1 : 0;
+          buffer.writeUInt32LE((original.length << 8) | flags, offset + 8);
+          buffer.writeUInt32LE(compressed.length, offset + 12);
+          compressed.copy(buffer, offset + 16);
+          offset += 16 + compressed.length;
         } else {
           buffer.writeUInt32LE(0, offset + 8);
-          offset += 12;
+          buffer.writeUInt32LE(0, offset + 12);
+          offset += 16;
         }
       }
       
       results.length = 0;
+      compressedResults.length = 0;
       
       ws.send(buffer, () => releaseBuffer(buffer));
     } catch (e) {

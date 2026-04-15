@@ -22,7 +22,7 @@ const DEFAULT_OPTIONS: RenderOptions = {
 };
 
 const REGION_SIZE = 512;
-const MAX_ATLASES = 512;
+const MAX_ATLASES = 256;
 
 const VERTEX_SHADER = `
 attribute vec4 a_data;
