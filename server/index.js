@@ -135,7 +135,7 @@ const MAX_BATCH_REGIONS = maxBatchRegions;
 const pixelCache = new LRUCache(MAX_MEMORY_CACHE_ENTRIES);
 const dbStatements = {};
 
-const NUM_WORKERS = Math.max(1, Math.min(cpus().length - 1, 4));
+const NUM_WORKERS = cpus().length;
 const workers = [];
 const workerBusy = [];
 const taskQueue = [];
@@ -931,6 +931,14 @@ app.get('/api/cache-directory', (req, res) => {
   res.json({ directory: cacheDirectory });
 });
 
+app.get('/api/config', (req, res) => {
+  res.json({
+    numWorkers: NUM_WORKERS,
+    maxConcurrentLoads: MAX_CONCURRENT_LOADS,
+    maxBatchRegions: MAX_BATCH_REGIONS
+  });
+});
+
 app.get('/api/cache-size', async (req, res) => {
   try {
     if (db) {
@@ -1358,7 +1366,7 @@ const WAYPOINT_COLORS = [
   0xFFFFFF, 0x888888, 0x444444, 0x000000
 ];
 
-function parseWaypointLine(line, defaultSetName = 'default') {
+function parseWaypointLine(line, defaultSetName = 'default', dimension = '') {
   const parts = line.split(':');
   
   if (parts[0] === 'waypoint' && parts.length >= 9) {
@@ -1394,7 +1402,7 @@ function parseWaypointLine(line, defaultSetName = 'default') {
       global,
       setName,
       yIncluded,
-      dimension: ''
+      dimension
     };
   }
   
@@ -1429,7 +1437,7 @@ function parseWaypointLine(line, defaultSetName = 'default') {
       global: false,
       setName: defaultSetName,
       yIncluded,
-      dimension: ''
+      dimension
     };
   }
   
@@ -1494,7 +1502,7 @@ async function findXaeroMinimapWaypoints(xaeroPath) {
   return servers;
 }
 
-async function loadWaypointsFromXaeroFile(filePath, setName = 'default') {
+async function loadWaypointsFromXaeroFile(filePath, setName = 'default', dimension = '') {
   try {
     console.log('Loading waypoints from:', filePath);
     const content = readFileSync(filePath, 'utf-8');
@@ -1503,7 +1511,7 @@ async function loadWaypointsFromXaeroFile(filePath, setName = 'default') {
     const waypoints = [];
     
     for (const line of lines) {
-      const waypoint = parseWaypointLine(line.trim(), setName);
+      const waypoint = parseWaypointLine(line.trim(), setName, dimension);
       if (waypoint) {
         waypoints.push(waypoint);
       }
@@ -1582,7 +1590,7 @@ app.get('/api/waypoints/server/:serverName', async (req, res) => {
           for (const wpFile of waypointFiles) {
             const filePath = path.join(dimPath, wpFile);
             const setName = wpFile.replace('.txt', '').replace('mw$', '');
-            const wps = await loadWaypointsFromXaeroFile(filePath, setName);
+            const wps = await loadWaypointsFromXaeroFile(filePath, setName, dimName);
             allWaypoints = allWaypoints.concat(wps);
           }
           dimWaypoints[dimName] = allWaypoints;
@@ -1623,7 +1631,7 @@ app.get('/api/waypoints/server/:serverName/:dimension', async (req, res) => {
     for (const wpFile of waypointFiles) {
       const filePath = path.join(dimPath, wpFile);
       const setName = wpFile.replace('.txt', '').replace('mw$', '');
-      const wps = await loadWaypointsFromXaeroFile(filePath, setName);
+      const wps = await loadWaypointsFromXaeroFile(filePath, setName, dimension);
       allWaypoints = allWaypoints.concat(wps);
     }
     

@@ -676,6 +676,566 @@ input[type="range"]::-webkit-slider-thumb:hover {
     inset -4px -4px 0 rgba(0, 0, 0, 0.5);
 }
 
+#zoom-control {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 4px;
+  gap: 4px;
+}
+
+.zoom-level-label {
+  color: var(--mc-text-white);
+  font-size: 12px;
+  font-family: "Minecraft", "Courier New", monospace;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  margin-bottom: 4px;
+}
+
+#zoom-control input[type="range"] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  -webkit-appearance: slider-vertical;
+  appearance: slider-vertical;
+  width: 12px;
+  height: 150px;
+  cursor: pointer;
+}
+
+#zoom-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: linear-gradient(180deg, 
+    var(--mc-grass-light) 0%, 
+    var(--mc-grass-green) 50%, 
+    var(--mc-grass-dark) 100%
+  );
+  border: 2px solid var(--mc-grass-dark);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+#zoom-control input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: linear-gradient(180deg, 
+    var(--mc-grass-light) 0%, 
+    var(--mc-grass-green) 50%, 
+    var(--mc-grass-dark) 100%
+  );
+  border: 2px solid var(--mc-grass-dark);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+#waypointBtn {
+  margin-top: 12px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: linear-gradient(180deg, 
+    var(--mc-grass-light) 0%, 
+    var(--mc-grass-green) 50%, 
+    var(--mc-grass-dark) 100%
+  );
+  border: 2px solid;
+  border-color: var(--mc-grass-light) var(--mc-grass-dark) var(--mc-grass-dark) var(--mc-grass-light);
+  color: var(--mc-text-white);
+  font-size: 18px;
+  cursor: pointer;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  box-shadow: 
+    inset 1px 1px 0 var(--mc-highlight),
+    inset -1px -1px 0 rgba(0, 0, 0, 0.3),
+    2px 2px 0 rgba(0, 0, 0, 0.5);
+  transition: all 0.1s ease;
+}
+
+#waypointBtn:hover {
+  background: linear-gradient(180deg, 
+    #9DD44F 0%, 
+    #7CB836 50%, 
+    #5A8A28 100%
+  );
+  color: var(--mc-text-yellow);
+}
+
+#waypointBtn:active {
+  transform: translate(1px, 1px);
+  box-shadow: 
+    inset -1px -1px 0 var(--mc-highlight),
+    inset 1px 1px 0 rgba(0, 0, 0, 0.3),
+    1px 1px 0 rgba(0, 0, 0, 0.5);
+}
+
+#gotoBtn {
+  margin-top: 8px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: linear-gradient(180deg, 
+    var(--mc-stone-light) 0%, 
+    var(--mc-stone) 50%, 
+    var(--mc-stone-dark) 100%
+  );
+  border: 2px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  color: var(--mc-text-white);
+  font-size: 18px;
+  cursor: pointer;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  box-shadow: 
+    inset 1px 1px 0 var(--mc-highlight),
+    inset -1px -1px 0 rgba(0, 0, 0, 0.3),
+    2px 2px 0 rgba(0, 0, 0, 0.5);
+  transition: all 0.1s ease;
+}
+
+#gotoBtn:hover {
+  background: linear-gradient(180deg, 
+    #C8C8C8 0%, 
+    #A8A8A8 50%, 
+    #888888 100%
+  );
+  color: var(--mc-text-yellow);
+}
+
+#gotoBtn:active {
+  transform: translate(1px, 1px);
+  box-shadow: 
+    inset -1px -1px 0 var(--mc-highlight),
+    inset 1px 1px 0 rgba(0, 0, 0, 0.3),
+    1px 1px 0 rgba(0, 0, 0, 0.5);
+}
+
+.goto-inputs {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.goto-input-group {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.goto-input-group label {
+  color: var(--mc-text-gray);
+  font-size: 12px;
+}
+
+.goto-input-group input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.goto-input-group input {
+  padding: 8px 12px;
+  background: var(--mc-bg-dark);
+  border: 3px solid;
+  border-color: var(--mc-stone-dark) var(--mc-stone-light) var(--mc-stone-light) var(--mc-stone-dark);
+  color: var(--mc-text-white);
+  font-size: 16px;
+  font-family: "Minecraft", "Courier New", monospace;
+}
+
+.goto-input-group input:focus {
+  outline: none;
+  border-color: var(--mc-diamond) var(--mc-emerald) var(--mc-emerald) var(--mc-diamond);
+}
+
+.btn-confirm {
+  width: 100%;
+  padding: 10px;
+  background: linear-gradient(180deg, 
+    var(--mc-grass-light) 0%, 
+    var(--mc-grass-green) 50%, 
+    var(--mc-grass-dark) 100%
+  );
+  border: 3px solid;
+  border-color: var(--mc-grass-light) var(--mc-grass-dark) var(--mc-grass-dark) var(--mc-grass-light);
+  color: var(--mc-text-white);
+  font-size: 14px;
+  font-family: "Minecraft", "Courier New", monospace;
+  cursor: pointer;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3),
+    4px 4px 0 rgba(0, 0, 0, 0.5);
+}
+
+.btn-confirm:hover {
+  background: linear-gradient(180deg, 
+    #9DD44F 0%, 
+    #7CB836 50%, 
+    #5A8A28 100%
+  );
+  color: var(--mc-text-yellow);
+}
+
+.btn-confirm:active {
+  transform: translate(2px, 2px);
+  box-shadow: 
+    inset -2px -2px 0 var(--mc-highlight),
+    inset 2px 2px 0 rgba(0, 0, 0, 0.3);
+}
+
+.modal {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal.open {
+  display: flex;
+}
+
+.modal-content {
+  width: 90%;
+  max-width: 500px;
+  max-height: 80vh;
+  background: linear-gradient(180deg, 
+    var(--mc-bg-panel) 0%, 
+    var(--mc-bg-dark) 100%
+  );
+  border: 4px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3),
+    8px 8px 0 rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, 
+    var(--mc-wood) 0%, 
+    var(--mc-wood-dark) 100%
+  );
+  border-bottom: 3px solid var(--mc-dirt-brown);
+}
+
+.modal-header h3 {
+  margin: 0;
+  color: var(--mc-text-yellow);
+  font-size: 18px;
+  text-shadow: 2px 2px 0 #3F2A15;
+}
+
+.modal-close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: linear-gradient(180deg, 
+    #C44 0%, 
+    #A33 50%, 
+    #822 100%
+  );
+  border: 2px solid;
+  border-color: #D66 #822 #822 #D66;
+  color: var(--mc-text-white);
+  font-size: 18px;
+  cursor: pointer;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  box-shadow: 
+    inset 1px 1px 0 rgba(255, 255, 255, 0.2),
+    inset -1px -1px 0 rgba(0, 0, 0, 0.3),
+    2px 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.modal-close:hover {
+  background: linear-gradient(180deg, 
+    #D55 0%, 
+    #B44 50%, 
+    #933 100%
+  );
+}
+
+.modal-body {
+  padding: 12px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.waypoint-filters {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.waypoint-toggles {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.waypoint-dim-filter {
+  display: flex;
+  gap: 4px;
+}
+
+.dim-filter-btn {
+  padding: 4px 10px;
+  background: linear-gradient(180deg, 
+    var(--mc-stone-light) 0%, 
+    var(--mc-stone) 50%, 
+    var(--mc-stone-dark) 100%
+  );
+  border: 2px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  color: var(--mc-text-white);
+  font-size: 12px;
+  font-family: "Minecraft", "Courier New", monospace;
+  cursor: pointer;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+}
+
+.dim-filter-btn:hover {
+  background: linear-gradient(180deg, 
+    var(--mc-wood-light) 0%, 
+    var(--mc-wood) 50%, 
+    var(--mc-wood-dark) 100%
+  );
+  color: var(--mc-text-yellow);
+}
+
+.dim-filter-btn.active {
+  background: linear-gradient(180deg, 
+    var(--mc-grass-light) 0%, 
+    var(--mc-grass-green) 50%, 
+    var(--mc-grass-dark) 100%
+  );
+  border-color: var(--mc-grass-light) var(--mc-grass-dark) var(--mc-grass-dark) var(--mc-grass-light);
+  color: var(--mc-text-white);
+}
+
+.waypoint-filters input[type="text"] {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--mc-bg-dark);
+  border: 3px solid;
+  border-color: var(--mc-stone-dark) var(--mc-stone-light) var(--mc-stone-light) var(--mc-stone-dark);
+  color: var(--mc-text-white);
+  font-size: 14px;
+  font-family: 'Minecraft', 'Courier New', monospace;
+}
+
+.waypoint-filters input[type="text"]:focus {
+  outline: none;
+  border-color: var(--mc-diamond) var(--mc-emerald) var(--mc-emerald) var(--mc-diamond);
+}
+
+.waypoint-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.waypoint-group {
+  border: 2px solid;
+  border-color: var(--mc-stone-dark) var(--mc-stone-light) var(--mc-stone-light) var(--mc-stone-dark);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.waypoint-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: linear-gradient(180deg, 
+    var(--mc-stone) 0%, 
+    var(--mc-stone-dark) 100%
+  );
+  cursor: pointer;
+  user-select: none;
+}
+
+.waypoint-group-header:hover {
+  background: linear-gradient(180deg, 
+    var(--mc-wood-light) 0%, 
+    var(--mc-wood) 100%
+  );
+}
+
+.waypoint-group-name {
+  color: var(--mc-text-yellow);
+  font-size: 14px;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+}
+
+.waypoint-group-count {
+  color: var(--mc-text-gray);
+  font-size: 12px;
+}
+
+.waypoint-group-toggle {
+  color: var(--mc-text-white);
+  font-size: 12px;
+  transition: transform 0.2s ease;
+}
+
+.waypoint-group.collapsed .waypoint-group-toggle {
+  transform: rotate(-90deg);
+}
+
+.waypoint-group-items {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.waypoint-group.collapsed .waypoint-group-items {
+  max-height: 0;
+  overflow: hidden;
+}
+
+.waypoint-group-items::-webkit-scrollbar {
+  width: 8px;
+}
+
+.waypoint-group-items::-webkit-scrollbar-track {
+  background: var(--mc-bg-dark);
+}
+
+.waypoint-group-items::-webkit-scrollbar-thumb {
+  background: var(--mc-stone);
+  border: 1px solid var(--mc-stone-dark);
+}
+
+.modal-waypoint-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(139, 90, 43, 0.2);
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.modal-waypoint-item:hover {
+  background: rgba(139, 90, 43, 0.3);
+}
+
+.modal-waypoint-item:last-child {
+  border-bottom: none;
+}
+
+.modal-waypoint-item.disabled {
+  opacity: 0.5;
+}
+
+.modal-waypoint-color {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: bold;
+  color: #000;
+  border: 2px solid rgba(0, 0, 0, 0.3);
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.modal-waypoint-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.modal-waypoint-name {
+  font-size: 14px;
+  color: var(--mc-text-white);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.waypoint-dim-tag {
+  font-size: 10px;
+  padding: 1px 4px;
+  margin-left: 4px;
+  border: 1px solid;
+  border-radius: 2px;
+  color: #fff;
+}
+
+.waypoint-dim-tag.dim-overworld {
+  background: rgba(76, 175, 80, 0.6);
+  border-color: #4CAF50;
+}
+
+.waypoint-dim-tag.dim-nether {
+  background: rgba(244, 67, 54, 0.6);
+  border-color: #F44336;
+}
+
+.waypoint-dim-tag.dim-end {
+  background: rgba(156, 39, 176, 0.6);
+  border-color: #9C27B0;
+}
+
+.modal-waypoint-coords {
+  font-size: 12px;
+  color: var(--mc-text-gray);
+}
+
+.modal-waypoint-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.modal-waypoint-actions button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: linear-gradient(180deg, 
+    var(--mc-stone-light) 0%, 
+    var(--mc-stone) 50%, 
+    var(--mc-stone-dark) 100%
+  );
+  border: 2px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  color: var(--mc-text-white);
+  font-size: 12px;
+  cursor: pointer;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+}
+
+.modal-waypoint-actions button:hover {
+  background: linear-gradient(180deg, 
+    var(--mc-wood-light) 0%, 
+    var(--mc-wood) 50%, 
+    var(--mc-wood-dark) 100%
+  );
+  color: var(--mc-text-yellow);
+}
+
 #mapCanvas {
   position: absolute;
   top: 0;
@@ -1143,4 +1703,76 @@ input[type="range"]::-webkit-slider-thumb:hover {
   font-size: 12px;
   color: var(--mc-text-gray);
   background: rgba(0, 0, 0, 0.3);
+}
+
+.context-menu {
+  display: none;
+  position: fixed;
+  z-index: 2000;
+  min-width: 180px;
+  background: linear-gradient(180deg, 
+    var(--mc-bg-panel) 0%, 
+    var(--mc-bg-dark) 100%
+  );
+  border: 3px solid;
+  border-color: var(--mc-stone-light) var(--mc-stone-dark) var(--mc-stone-dark) var(--mc-stone-light);
+  box-shadow: 
+    inset 2px 2px 0 var(--mc-highlight),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3),
+    6px 6px 0 rgba(0, 0, 0, 0.6);
+}
+
+.context-menu.open {
+  display: block;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  color: var(--mc-text-white);
+  font-size: 14px;
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  transition: background 0.1s ease;
+}
+
+.context-menu-item:hover {
+  background: linear-gradient(180deg, 
+    var(--mc-wood-light) 0%, 
+    var(--mc-wood) 50%, 
+    var(--mc-wood-dark) 100%
+  );
+  color: var(--mc-text-yellow);
+}
+
+.context-menu-item:first-child {
+  border-top: none;
+}
+
+.context-menu-icon {
+  font-size: 16px;
+}
+
+.context-menu-coords {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--mc-text-gray);
+}
+
+.context-menu-item:hover .context-menu-coords {
+  color: var(--mc-text-yellow);
+}
+
+.context-menu-divider {
+  height: 2px;
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    var(--mc-stone-dark) 20%, 
+    var(--mc-stone-light) 50%, 
+    var(--mc-stone-dark) 80%, 
+    transparent 100%
+  );
+  margin: 4px 0;
 }

@@ -30,6 +30,13 @@
             </div>
             <div class="hint" id="currentServer">当前: localhost:3001</div>
           </div>
+          <div class="control-group">
+            <div class="inline-label">
+              <label>并发加载</label>
+              <span id="concurrentValue" class="value">256</span>
+            </div>
+            <input type="range" id="concurrentSlider" min="16" max="512" value="256" step="1">
+          </div>
         </div>
       </div>
       
@@ -87,66 +94,7 @@
         </div>
       </div>
       
-      <div class="section" data-section="view">
-        <div class="section-title" data-toggle="view">
-          <span class="toggle-icon">▼</span>
-          <span>视图控制</span>
-        </div>
-        <div class="section-content">
-          <div class="control-group inline">
-            <label>坐标</label>
-            <span id="coords" class="value">-</span>
-          </div>
-          <div class="control-group">
-            <div class="inline-label">
-              <label>缩放</label>
-              <span id="zoomLevel" class="value">1x</span>
-            </div>
-            <input type="range" id="zoomSlider" min="-8" max="4" value="0" step="0.5">
-          </div>
-          <div class="control-group">
-            <label>跳转坐标</label>
-            <div class="coord-inputs">
-              <input type="text" id="targetX" placeholder="X" value="0">
-              <input type="text" id="targetZ" placeholder="Z" value="0">
-              <button id="gotoCoords">跳转</button>
-            </div>
-          </div>
-          <div class="control-group">
-            <div class="inline-label">
-              <label>并发加载</label>
-              <span id="concurrentValue" class="value">256</span>
-            </div>
-            <input type="range" id="concurrentSlider" min="16" max="512" value="256" step="1">
-          </div>
-        </div>
-      </div>
-      
-      <div class="section" data-section="waypoints" id="waypointSection">
-        <div class="section-title" data-toggle="waypoints">
-          <span class="toggle-icon">▼</span>
-          <span>路径点</span>
-        </div>
-        <div class="section-content">
-          <div class="control-group">
-            <label class="checkbox-label">
-              <input type="checkbox" id="showWaypoints" checked>
-              <span>显示路径点</span>
-            </label>
-          </div>
-          <div class="control-group">
-            <div class="inline-label">
-              <label>路径点数量</label>
-              <span id="waypointCount" class="value">0</span>
-            </div>
-          </div>
-          <div class="control-group">
-            <button id="refreshWaypoints" class="btn-confirm">刷新路径点</button>
-          </div>
-          <div id="waypointList" class="waypoint-list"></div>
-        </div>
-      </div>
-      
+
       <div id="loading" style="display:none;">
         <div class="spinner"></div>
         <span>加载中...</span>
@@ -157,6 +105,83 @@
     
     <div id="map-container">
       <canvas id="mapCanvas"></canvas>
+      <div id="zoom-control">
+        <span id="zoomLevel" class="zoom-level-label">1x</span>
+        <input type="range" id="zoomSlider" min="-8" max="4" value="0" step="0.5">
+        <button id="gotoBtn" title="跳转坐标">⊕</button>
+        <button id="waypointBtn" title="路径点">⚑</button>
+      </div>
+    </div>
+    
+    <div id="waypointModal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>路径点</h3>
+          <button class="modal-close" id="closeWaypointModal">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="waypoint-filters">
+            <input type="text" id="waypointSearch" placeholder="搜索路径点...">
+            <div class="waypoint-dim-filter">
+              <button class="dim-filter-btn active" data-dim="all">全部</button>
+              <button class="dim-filter-btn" data-dim="overworld">主世界</button>
+              <button class="dim-filter-btn" data-dim="nether">下界</button>
+              <button class="dim-filter-btn" data-dim="end">末地</button>
+            </div>
+            <div class="waypoint-toggles">
+              <label class="checkbox-label">
+                <input type="checkbox" id="showWaypointsToggle" checked>
+                <span>显示路径点</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="showDisabledWaypoints">
+                <span>显示已禁用</span>
+              </label>
+            </div>
+          </div>
+          <div id="waypointGroups" class="waypoint-groups"></div>
+        </div>
+      </div>
+    </div>
+    
+    <div id="gotoModal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>跳转坐标</h3>
+          <button class="modal-close" id="closeGotoModal">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="goto-inputs">
+            <div class="goto-input-group">
+              <label>X</label>
+              <input type="text" id="targetX" placeholder="0" value="0" oninput="this.value=this.value.replace(/[^0-9\-]/g,'').replace(/(?!^)-/g,'')">
+            </div>
+            <div class="goto-input-group">
+              <label>Z</label>
+              <input type="text" id="targetZ" placeholder="0" value="0" oninput="this.value=this.value.replace(/[^0-9\-]/g,'').replace(/(?!^)-/g,'')">
+            </div>
+          </div>
+          <button id="gotoConfirm" class="btn-confirm">跳转</button>
+        </div>
+      </div>
+    </div>
+    
+    <div id="contextMenu" class="context-menu">
+      <div class="context-menu-item" id="ctxGotoNether">
+        <span class="context-menu-icon">🔥</span>
+        <span>跳转到下界</span>
+        <span class="context-menu-coords" id="ctxNetherCoords"></span>
+      </div>
+      <div class="context-menu-item" id="ctxGotoOverworld">
+        <span class="context-menu-icon">🌍</span>
+        <span>跳转到主世界</span>
+        <span class="context-menu-coords" id="ctxOverworldCoords"></span>
+      </div>
+      <div class="context-menu-divider"></div>
+      <div class="context-menu-item" id="ctxCopyCoords">
+        <span class="context-menu-icon">📋</span>
+        <span>复制坐标</span>
+      </div>
     </div>
   </div>
   <script type="module" src="/src/main.ts"></script>

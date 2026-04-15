@@ -6,6 +6,7 @@ const STORAGE_KEY_MAP_STATE = 'xaero_map_state';
 const STORAGE_KEY_SECTIONS = 'xaero_map_sections';
 const STORAGE_KEY_CONCURRENT = 'xaero_map_concurrent';
 const STORAGE_KEY_SHOW_WAYPOINTS = 'xaero_map_show_waypoints';
+const STORAGE_KEY_SHOW_DISABLED_WAYPOINTS = 'xaero_map_show_disabled_waypoints';
 const DEFAULT_CONCURRENT_LOADS = 256;
 
 function getDefaultServer(): string {
@@ -64,8 +65,11 @@ class XaeroMapViewer {
     
     this.renderer.setOnViewportChange((bounds) => this.onViewportChange(bounds));
     this.renderer.setOnLodChange(() => this.onLodChange());
+    this.renderer.setOnContextMenu((x, z, screenX, screenY) => this.handleContextMenu(x, z, screenX, screenY));
     
     this.setupUI();
+    this.setupContextMenu();
+    this.setupGotoModal();
     this.connectWebSocket();
     this.startAutoLoad();
   }
@@ -168,7 +172,6 @@ class XaeroMapViewer {
     const dimSelector = document.getElementById('dimSelector') as HTMLSelectElement;
     const mapTypeSelector = document.getElementById('mapTypeSelector') as HTMLSelectElement;
     const zoomSlider = document.getElementById('zoomSlider') as HTMLInputElement;
-    const gotoBtn = document.getElementById('gotoCoords') as HTMLButtonElement;
     const setServerBtn = document.getElementById('setServerBtn') as HTMLButtonElement;
     const serverInput = document.getElementById('serverInput') as HTMLInputElement;
     const toggleSidebar = document.getElementById('toggleSidebar');
@@ -182,7 +185,6 @@ class XaeroMapViewer {
       const value = parseFloat((e.target as HTMLInputElement).value);
       this.renderer.setScale(Math.pow(2, value));
     });
-    gotoBtn?.addEventListener('click', () => this.handleGotoCoords());
     setServerBtn?.addEventListener('click', () => this.setServerAddress(serverInput.value));
     
     toggleSidebar?.addEventListener('click', () => {
@@ -215,9 +217,8 @@ class XaeroMapViewer {
         caveStartGroup.style.display = this.currentCaveMode === 1 ? 'block' : 'none';
       }
       this.saveMapState();
-      this.loadRegionList();
+      this.preserveViewAndReload();
     });
-    
     const caveStartSlider = document.getElementById('caveStartSlider') as HTMLInputElement;
     caveStartSlider?.addEventListener('input', (e) => {
       const value = parseInt((e.target as HTMLInputElement).value);
@@ -225,7 +226,7 @@ class XaeroMapViewer {
       const caveStartValue = document.getElementById('caveStartValue');
       if (caveStartValue) caveStartValue.textContent = value.toString();
       this.saveMapState();
-      this.loadRegionList();
+      this.preserveViewAndReload();
     });
     
     const setCacheDirBtn = document.getElementById('setCacheDirBtn') as HTMLButtonElement;
@@ -255,7 +256,32 @@ class XaeroMapViewer {
     this.loadWaypointSettings();
     this.setupWaypointUI();
     
+    this.syncServerConfig();
+    
     this.showLoading(false);
+  }
+
+  private async syncServerConfig(): Promise<void> {
+    try {
+      const response = await fetch(`${API_BASE}/config`);
+      if (response.ok) {
+        const config = await response.json();
+        const numWorkers = config.numWorkers || 4;
+        
+        const concurrentSlider = document.getElementById('concurrentSlider') as HTMLInputElement;
+        if (concurrentSlider) {
+          concurrentSlider.min = '1';
+          concurrentSlider.max = String(numWorkers);
+          
+          if (this.concurrentLoads > numWorkers) {
+            this.concurrentLoads = numWorkers;
+            concurrentSlider.value = String(numWorkers);
+            const concurrentValue = document.getElementById('concurrentValue');
+            if (concurrentValue) concurrentValue.textContent = String(numWorkers);
+          }
+        }
+      }
+    } catch {}
   }
 
   private loadWaypointSettings(): void {
@@ -266,102 +292,477 @@ class XaeroMapViewer {
       }
     } catch {}
     this.renderer.setShowWaypoints(this.showWaypoints);
-    const showWaypointsCheckbox = document.getElementById('showWaypoints') as HTMLInputElement;
-    if (showWaypointsCheckbox) {
-      showWaypointsCheckbox.checked = this.showWaypoints;
+  }
+
+  private waypointDimFilter: string = 'all';
+
+  private setupWaypointUI(): void {
+    const waypointBtn = document.getElementById('waypointBtn');
+    const waypointModal = document.getElementById('waypointModal');
+    const closeWaypointModal = document.getElementById('closeWaypointModal');
+    const waypointSearch = document.getElementById('waypointSearch') as HTMLInputElement;
+    const showDisabledWaypoints = document.getElementById('showDisabledWaypoints') as HTMLInputElement;
+
+    let savedShowDisabled = false;
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SHOW_DISABLED_WAYPOINTS);
+      if (saved !== null) {
+        savedShowDisabled = saved === 'true';
+      }
+    } catch {}
+    if (showDisabledWaypoints) {
+      showDisabledWaypoints.checked = savedShowDisabled;
+    }
+    this.renderer.setShowDisabledWaypoints(savedShowDisabled);
+
+    const showWaypointsToggle = document.getElementById('showWaypointsToggle') as HTMLInputElement;
+    if (showWaypointsToggle) {
+      showWaypointsToggle.checked = this.showWaypoints;
+      showWaypointsToggle.addEventListener('change', () => {
+        this.showWaypoints = showWaypointsToggle.checked;
+        this.renderer.setShowWaypoints(this.showWaypoints);
+        localStorage.setItem(STORAGE_KEY_SHOW_WAYPOINTS, String(this.showWaypoints));
+      });
+    }
+
+    waypointBtn?.addEventListener('click', () => {
+      this.openWaypointModal();
+    });
+
+    closeWaypointModal?.addEventListener('click', () => {
+      waypointModal?.classList.remove('open');
+    });
+
+    waypointModal?.addEventListener('click', (e) => {
+      if (e.target === waypointModal) {
+        waypointModal.classList.remove('open');
+      }
+    });
+
+    waypointSearch?.addEventListener('input', () => {
+      this.updateWaypointModal();
+    });
+
+    showDisabledWaypoints?.addEventListener('change', () => {
+      localStorage.setItem(STORAGE_KEY_SHOW_DISABLED_WAYPOINTS, String(showDisabledWaypoints.checked));
+      this.renderer.setShowDisabledWaypoints(showDisabledWaypoints.checked);
+      this.updateWaypointModal();
+    });
+
+    const dimFilterBtns = document.querySelectorAll('.dim-filter-btn');
+    dimFilterBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        dimFilterBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.waypointDimFilter = (btn as HTMLElement).dataset.dim || 'all';
+        this.updateWaypointModal();
+      });
+    });
+
+    this.renderer.setOnWaypointClick((waypoint) => this.handleWaypointClick(waypoint));
+  }
+
+  private openWaypointModal(): void {
+    const waypointModal = document.getElementById('waypointModal');
+    waypointModal?.classList.add('open');
+    this.updateWaypointModal();
+  }
+
+  private updateWaypointModal(): void {
+    const groupsEl = document.getElementById('waypointGroups');
+    const searchInput = document.getElementById('waypointSearch') as HTMLInputElement;
+    const showDisabledCheckbox = document.getElementById('showDisabledWaypoints') as HTMLInputElement;
+    
+    if (!groupsEl) return;
+
+    const searchTerm = searchInput?.value.toLowerCase() || '';
+    const showDisabled = showDisabledCheckbox?.checked || false;
+
+    const groups = this.groupWaypoints(this.waypoints);
+    
+    groupsEl.innerHTML = '';
+
+    for (const [setName, waypoints] of groups) {
+      let filteredWaypoints = waypoints;
+      
+      if (this.waypointDimFilter !== 'all') {
+        filteredWaypoints = filteredWaypoints.filter(w => {
+          const dimType = this.getWaypointDimensionType(w);
+          return dimType === this.waypointDimFilter;
+        });
+      }
+
+      if (searchTerm) {
+        filteredWaypoints = filteredWaypoints.filter(w => 
+          w.name.toLowerCase().includes(searchTerm) ||
+          `${w.x}, ${w.y}, ${w.z}`.includes(searchTerm)
+        );
+      }
+
+      if (!showDisabled) {
+        filteredWaypoints = filteredWaypoints.filter(w => !w.disabled);
+      }
+
+      if (filteredWaypoints.length === 0) continue;
+
+      const groupEl = document.createElement('div');
+      groupEl.className = 'waypoint-group';
+
+      const headerEl = document.createElement('div');
+      headerEl.className = 'waypoint-group-header';
+      headerEl.innerHTML = `
+        <div>
+          <span class="waypoint-group-name">${setName}</span>
+          <span class="waypoint-group-count">(${filteredWaypoints.length})</span>
+        </div>
+        <span class="waypoint-group-toggle">▼</span>
+      `;
+
+      const itemsEl = document.createElement('div');
+      itemsEl.className = 'waypoint-group-items';
+
+      const sortedWaypoints = [...filteredWaypoints].sort((a, b) => {
+        if (a.disabled !== b.disabled) return a.disabled ? 1 : -1;
+        return a.name.localeCompare(b.name);
+      });
+
+      for (const waypoint of sortedWaypoints) {
+        const itemEl = document.createElement('div');
+        itemEl.className = 'modal-waypoint-item' + (waypoint.disabled ? ' disabled' : '');
+
+        const color = waypoint.color;
+        const r = (color >> 16) & 0xFF;
+        const g = (color >> 8) & 0xFF;
+        const b = color & 0xFF;
+
+        const coordScale = this.getWaypointCoordScale(waypoint);
+        const displayX = Math.floor(waypoint.x * coordScale);
+        const displayZ = Math.floor(waypoint.z * coordScale);
+
+        const dimName = this.getDimensionDisplayName(waypoint.dimension);
+        const dimType = this.getWaypointDimensionType(waypoint);
+        const dimClass = dimType !== 'unknown' ? ` dim-${dimType}` : '';
+
+        itemEl.innerHTML = `
+          <div class="modal-waypoint-color" style="background-color: rgb(${r}, ${g}, ${b})">${waypoint.symbol}</div>
+          <div class="modal-waypoint-info">
+            <div class="modal-waypoint-name">${waypoint.name}${dimName ? ` <span class="waypoint-dim-tag${dimClass}">${dimName}</span>` : ''}</div>
+            <div class="modal-waypoint-coords">X: ${displayX}, Y: ${waypoint.y}, Z: ${displayZ}</div>
+          </div>
+          <div class="modal-waypoint-actions">
+            <button class="goto-btn" title="跳转">→</button>
+          </div>
+        `;
+
+        const gotoBtn = itemEl.querySelector('.goto-btn');
+        gotoBtn?.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.handleWaypointClick(waypoint);
+          document.getElementById('waypointModal')?.classList.remove('open');
+        });
+
+        itemEl.addEventListener('click', () => {
+          this.handleWaypointClick(waypoint);
+          document.getElementById('waypointModal')?.classList.remove('open');
+        });
+
+        itemsEl.appendChild(itemEl);
+      }
+
+      headerEl.addEventListener('click', () => {
+        groupEl.classList.toggle('collapsed');
+      });
+
+      groupEl.appendChild(headerEl);
+      groupEl.appendChild(itemsEl);
+      groupsEl.appendChild(groupEl);
+    }
+
+    if (groupsEl.children.length === 0) {
+      groupsEl.innerHTML = '<div style="text-align: center; color: var(--mc-text-gray); padding: 20px;">没有找到路径点</div>';
     }
   }
 
-  private setupWaypointUI(): void {
-    const showWaypointsCheckbox = document.getElementById('showWaypoints') as HTMLInputElement;
-    showWaypointsCheckbox?.addEventListener('change', (e) => {
-      this.showWaypoints = (e.target as HTMLInputElement).checked;
-      this.renderer.setShowWaypoints(this.showWaypoints);
-      localStorage.setItem(STORAGE_KEY_SHOW_WAYPOINTS, String(this.showWaypoints));
-    });
+  private groupWaypoints(waypoints: Waypoint[]): Map<string, Waypoint[]> {
+    const groups = new Map<string, Waypoint[]>();
+    
+    for (const waypoint of waypoints) {
+      const setName = waypoint.setName || 'default';
+      if (!groups.has(setName)) {
+        groups.set(setName, []);
+      }
+      groups.get(setName)!.push(waypoint);
+    }
 
-    const refreshWaypointsBtn = document.getElementById('refreshWaypoints') as HTMLButtonElement;
-    refreshWaypointsBtn?.addEventListener('click', () => this.loadWaypoints());
-
-    this.renderer.setOnWaypointClick((waypoint) => this.handleWaypointClick(waypoint));
+    return groups;
   }
 
   private async loadWaypoints(): Promise<void> {
     if (!this.currentWorld) return;
     
     try {
-      const dimName = this.currentDim || 'null';
-      let dimParam = dimName;
-      if (dimName === 'null' || dimName === 'overworld') dimParam = 'null';
-      else if (dimName === 'DIM-1' || dimName.toLowerCase().includes('nether')) dimParam = 'DIM-1';
-      else if (dimName === 'DIM1' || dimName.toLowerCase().includes('end')) dimParam = 'DIM1';
-      
-      const response = await fetch(`${API_BASE}/waypoints/server/${encodeURIComponent(this.currentWorld)}/${encodeURIComponent(dimParam)}`);
+      const response = await fetch(`${API_BASE}/waypoints/server/${encodeURIComponent(this.currentWorld)}`);
       if (response.ok) {
         const data = await response.json();
-        this.waypoints = data.waypoints || [];
+        const dimWaypoints = data.waypoints || {};
+        
+        let allWaypoints: Waypoint[] = [];
+        for (const dimName of Object.keys(dimWaypoints)) {
+          const wps = dimWaypoints[dimName];
+          for (const wp of wps) {
+            wp.dimension = dimName;
+          }
+          allWaypoints = allWaypoints.concat(wps);
+        }
+        
+        this.waypoints = allWaypoints;
         this.renderer.setWaypoints(this.waypoints);
-        this.updateWaypointCount();
-        this.updateWaypointList();
       }
     } catch (e) {
       console.error('Failed to load waypoints:', e);
     }
   }
 
-  private updateWaypointCount(): void {
-    const countEl = document.getElementById('waypointCount');
-    if (countEl) {
-      const activeCount = this.waypoints.filter(w => !w.disabled).length;
-      countEl.textContent = `${activeCount}/${this.waypoints.length}`;
+  private handleWaypointClick(waypoint: Waypoint): void {
+    const dimType = this.getWaypointDimensionType(waypoint);
+    const isNether = this.isNetherDimension();
+    const isEnd = this.isEndDimension();
+    
+    if (dimType === 'end' && !isEnd) {
+      this.switchToDimension('DIM1');
+      setTimeout(() => { this.renderer.centerOn(waypoint.x, waypoint.z); }, 500);
+      return;
+    }
+
+    if (dimType === 'nether' && !isNether) {
+      this.switchToDimension('DIM-1');
+      setTimeout(() => { this.renderer.centerOn(waypoint.x, waypoint.z); }, 500);
+      return;
+    }
+
+    if (dimType === 'overworld' && (isNether || isEnd)) {
+      this.switchToDimension('null');
+      setTimeout(() => { this.renderer.centerOn(waypoint.x, waypoint.z); }, 500);
+      return;
+    }
+
+    this.renderer.centerOn(waypoint.x, waypoint.z);
+  }
+
+  private async switchToDimension(dimValue: string): Promise<void> {
+    const dimSelector = document.getElementById('dimSelector') as HTMLSelectElement;
+    if (!dimSelector) return;
+
+    const targetOption = Array.from(dimSelector.options).find(opt => opt.value === dimValue);
+    if (targetOption) {
+      dimSelector.value = targetOption.value;
+      await this.handleDimChange();
     }
   }
 
-  private updateWaypointList(): void {
-    const listEl = document.getElementById('waypointList');
-    if (!listEl) return;
+  private getWaypointDimensionType(waypoint: Waypoint): 'overworld' | 'nether' | 'end' | 'unknown' {
+    if (!waypoint.dimension) return 'overworld';
+    const dim = waypoint.dimension.toLowerCase();
+    
+    if (dim.includes('nether') || waypoint.dimension.includes('DIM-1') || dim.includes('下界')) {
+      return 'nether';
+    }
+    if (dim.includes('end') || waypoint.dimension.includes('DIM1') || dim.includes('末地')) {
+      return 'end';
+    }
+    if (dim.includes('overworld') || waypoint.dimension === 'null' || dim.includes('主世界')) {
+      return 'overworld';
+    }
+    
+    return 'unknown';
+  }
 
-    listEl.innerHTML = '';
+  private getWaypointCoordScale(waypoint: Waypoint): number {
+    if (!waypoint.dimension) return 1;
+    
+    const isNether = this.isNetherDimension();
+    const isEnd = this.isEndDimension();
+    const dim = waypoint.dimension.toLowerCase();
+    
+    const isWaypointNether = dim.includes('nether') || waypoint.dimension.includes('DIM-1') || dim.includes('下界');
+    const isWaypointEnd = dim.includes('end') || waypoint.dimension.includes('DIM1') || dim.includes('末地');
+    const isWaypointOverworld = dim.includes('overworld') || waypoint.dimension === 'null' || dim.includes('主世界') || (!isWaypointNether && !isWaypointEnd);
 
-    const sortedWaypoints = [...this.waypoints].sort((a, b) => {
-      if (a.disabled !== b.disabled) return a.disabled ? 1 : -1;
-      return a.name.localeCompare(b.name);
+    if (isEnd || isWaypointEnd) {
+      return 1;
+    }
+
+    if (isNether && isWaypointOverworld) {
+      return 1/8;
+    }
+
+    if (!isNether && isWaypointNether) {
+      return 8;
+    }
+
+    return 1;
+  }
+
+  private getDimensionDisplayName(dimension: string): string {
+    if (!dimension) return '';
+    const dim = dimension.toLowerCase();
+    
+    if (dim.includes('nether') || dimension.includes('DIM-1') || dim.includes('下界')) {
+      return '下界';
+    }
+    if (dim.includes('end') || dimension.includes('DIM1') || dim.includes('末地')) {
+      return '末地';
+    }
+    if (dim.includes('overworld') || dimension === 'null' || dim.includes('主世界')) {
+      return '主世界';
+    }
+    
+    return '';
+  }
+
+  private setupContextMenu(): void {
+    const contextMenu = document.getElementById('contextMenu');
+    const ctxGotoNether = document.getElementById('ctxGotoNether');
+    const ctxGotoOverworld = document.getElementById('ctxGotoOverworld');
+    const ctxCopyCoords = document.getElementById('ctxCopyCoords');
+
+    document.addEventListener('click', () => {
+      contextMenu?.classList.remove('open');
     });
 
-    for (const waypoint of sortedWaypoints.slice(0, 20)) {
-      const item = document.createElement('div');
-      item.className = 'waypoint-item' + (waypoint.disabled ? ' disabled' : '');
-      
-      const color = waypoint.color;
-      const r = (color >> 16) & 0xFF;
-      const g = (color >> 8) & 0xFF;
-      const b = color & 0xFF;
+    ctxGotoNether?.addEventListener('click', () => {
+      this.gotoNether();
+      contextMenu?.classList.remove('open');
+    });
 
-      item.innerHTML = `
-        <div class="waypoint-color" style="background-color: rgb(${r}, ${g}, ${b})">${waypoint.symbol}</div>
-        <div class="waypoint-info">
-          <div class="waypoint-name">${waypoint.name}</div>
-          <div class="waypoint-coords">X: ${waypoint.x}, Y: ${waypoint.y}, Z: ${waypoint.z}</div>
-        </div>
-      `;
+    ctxGotoOverworld?.addEventListener('click', () => {
+      this.gotoOverworld();
+      contextMenu?.classList.remove('open');
+    });
 
-      item.addEventListener('click', () => {
-        this.renderer.centerOn(waypoint.x, waypoint.z);
-      });
+    ctxCopyCoords?.addEventListener('click', () => {
+      this.copyContextCoords();
+      contextMenu?.classList.remove('open');
+    });
+  }
 
-      listEl.appendChild(item);
+  private contextWorldX: number = 0;
+  private contextWorldZ: number = 0;
+
+  private handleContextMenu(worldX: number, worldZ: number, screenX: number, screenY: number): void {
+    this.contextWorldX = worldX;
+    this.contextWorldZ = worldZ;
+
+    const contextMenu = document.getElementById('contextMenu');
+    const ctxGotoNether = document.getElementById('ctxGotoNether');
+    const ctxGotoOverworld = document.getElementById('ctxGotoOverworld');
+    const ctxNetherCoords = document.getElementById('ctxNetherCoords');
+    const ctxOverworldCoords = document.getElementById('ctxOverworldCoords');
+
+    if (!contextMenu) return;
+
+    const isNether = this.isNetherDimension();
+    const isEnd = this.isEndDimension();
+
+    if (ctxGotoNether && ctxGotoOverworld) {
+      if (isEnd) {
+        ctxGotoNether.style.display = 'none';
+        ctxGotoOverworld.style.display = 'none';
+      } else if (isNether) {
+        ctxGotoNether.style.display = 'none';
+        ctxGotoOverworld.style.display = 'flex';
+        const overworldX = worldX * 8;
+        const overworldZ = worldZ * 8;
+        if (ctxOverworldCoords) {
+          ctxOverworldCoords.textContent = `(${overworldX}, ${overworldZ})`;
+        }
+      } else {
+        ctxGotoNether.style.display = 'flex';
+        ctxGotoOverworld.style.display = 'none';
+        const netherX = Math.floor(worldX / 8);
+        const netherZ = Math.floor(worldZ / 8);
+        if (ctxNetherCoords) {
+          ctxNetherCoords.textContent = `(${netherX}, ${netherZ})`;
+        }
+      }
     }
 
-    if (this.waypoints.length > 20) {
-      const moreItem = document.createElement('div');
-      moreItem.className = 'waypoint-more';
-      moreItem.textContent = `还有 ${this.waypoints.length - 20} 个路径点...`;
-      listEl.appendChild(moreItem);
+    contextMenu.style.left = `${screenX}px`;
+    contextMenu.style.top = `${screenY}px`;
+    contextMenu.classList.add('open');
+  }
+
+  private isNetherDimension(): boolean {
+    if (!this.currentDim) return false;
+    const dim = this.currentDim.toLowerCase();
+    return dim.includes('nether') || 
+           this.currentDim.includes('DIM-1') || 
+           dim.includes('下界');
+  }
+
+  private isEndDimension(): boolean {
+    if (!this.currentDim) return false;
+    const dim = this.currentDim.toLowerCase();
+    return dim.includes('end') || 
+           this.currentDim.includes('DIM1') || 
+           dim.includes('末地');
+  }
+
+  private async gotoNether(): Promise<void> {
+    if (!this.currentWorld) return;
+
+    const netherX = Math.floor(this.contextWorldX / 8);
+    const netherZ = Math.floor(this.contextWorldZ / 8);
+
+    const dimSelector = document.getElementById('dimSelector') as HTMLSelectElement;
+    if (!dimSelector) return;
+
+    const netherOption = Array.from(dimSelector.options).find(opt => 
+      opt.value === 'DIM-1' || 
+      opt.value.toLowerCase().includes('nether') ||
+      opt.textContent?.includes('下界')
+    );
+
+    if (netherOption) {
+      dimSelector.value = netherOption.value;
+      await this.handleDimChange();
+      this.renderer.centerOn(netherX, netherZ);
+    } else {
+      alert('当前世界没有下界维度');
     }
   }
 
-  private handleWaypointClick(waypoint: Waypoint): void {
-    this.renderer.centerOn(waypoint.x, waypoint.z);
+  private async gotoOverworld(): Promise<void> {
+    if (!this.currentWorld) return;
+
+    const overworldX = this.contextWorldX * 8;
+    const overworldZ = this.contextWorldZ * 8;
+
+    const dimSelector = document.getElementById('dimSelector') as HTMLSelectElement;
+    if (!dimSelector) return;
+
+    const overworldOption = Array.from(dimSelector.options).find(opt => 
+      opt.value === 'null' || 
+      opt.value.toLowerCase().includes('overworld') ||
+      opt.textContent?.includes('主世界')
+    );
+
+    if (overworldOption) {
+      dimSelector.value = overworldOption.value;
+      await this.handleDimChange();
+      this.renderer.centerOn(overworldX, overworldZ);
+    } else {
+      alert('当前世界没有主世界维度');
+    }
+  }
+
+  private copyContextCoords(): void {
+    const text = `${this.contextWorldX}, ${this.contextWorldZ}`;
+    navigator.clipboard.writeText(text).then(() => {
+      console.log('坐标已复制:', text);
+    }).catch(err => {
+      console.error('复制失败:', err);
+    });
   }
 
   private setupSectionToggle(): void {
@@ -765,6 +1166,21 @@ class XaeroMapViewer {
     }
   }
 
+  private preserveViewAndReload(): void {
+    const viewState = this.renderer.getViewState();
+    this.savedMapState = {
+      scale: viewState.scale,
+      centerX: viewState.centerX,
+      centerZ: viewState.centerZ,
+      world: this.currentWorld || '',
+      dim: this.currentDim || 'null',
+      mapType: this.currentMapType || '',
+      caveMode: this.currentCaveMode,
+      caveStart: this.currentCaveStart
+    };
+    this.loadRegionList();
+  }
+
   private async loadRegionList(): Promise<void> {
     if (!this.currentWorld || !this.currentDim) return;
     
@@ -811,8 +1227,9 @@ class XaeroMapViewer {
       if (this.savedMapState?.scale && this.savedMapState?.centerX !== undefined && this.savedMapState?.centerZ !== undefined) {
         this.renderer.setViewState(this.savedMapState.scale, this.savedMapState.centerX, this.savedMapState.centerZ);
         this.savedMapState = null;
-      } else {
-        this.renderer.centerOn(0, 0);
+      } else if (this.allRegions.length === 0) {
+        const currentView = this.renderer.getViewState();
+        this.renderer.setViewState(currentView.scale, currentView.centerX, currentView.centerZ);
       }
       
       this.loadVisibleRegions();
@@ -1084,6 +1501,32 @@ class XaeroMapViewer {
       }
       console.error(`Failed to load region ${x},${z}:`, e);
     }
+  }
+
+  private setupGotoModal(): void {
+    const gotoBtn = document.getElementById('gotoBtn');
+    const gotoModal = document.getElementById('gotoModal');
+    const closeGotoModal = document.getElementById('closeGotoModal');
+    const gotoConfirm = document.getElementById('gotoConfirm');
+
+    gotoBtn?.addEventListener('click', () => {
+      gotoModal?.classList.add('open');
+    });
+
+    closeGotoModal?.addEventListener('click', () => {
+      gotoModal?.classList.remove('open');
+    });
+
+    gotoModal?.addEventListener('click', (e) => {
+      if (e.target === gotoModal) {
+        gotoModal.classList.remove('open');
+      }
+    });
+
+    gotoConfirm?.addEventListener('click', () => {
+      this.handleGotoCoords();
+      gotoModal?.classList.remove('open');
+    });
   }
 
   private handleGotoCoords(): void {
