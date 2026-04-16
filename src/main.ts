@@ -1,7 +1,6 @@
 import { MapRenderer, ViewportBounds } from './renderer/MapRenderer';
 import type { Waypoint } from './core/types';
 
-const STORAGE_KEY_SERVER = 'xaero_map_server';
 const STORAGE_KEY_MAP_STATE = 'xaero_map_state';
 const STORAGE_KEY_SECTIONS = 'xaero_map_sections';
 const STORAGE_KEY_CONCURRENT = 'xaero_map_concurrent';
@@ -9,14 +8,8 @@ const STORAGE_KEY_SHOW_WAYPOINTS = 'xaero_map_show_waypoints';
 const STORAGE_KEY_SHOW_DISABLED_WAYPOINTS = 'xaero_map_show_disabled_waypoints';
 const DEFAULT_CONCURRENT_LOADS = 256;
 
-function getDefaultServer(): string {
-  const host = window.location.host;
-  return host || 'localhost:3001';
-}
-
-let currentServer = getDefaultServer();
-let API_BASE = `${window.location.protocol}//${currentServer}/api`;
-let WS_BASE = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${currentServer}`;
+const API_BASE = `${window.location.protocol}//${window.location.host}/api`;
+const WS_BASE = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
 
 interface MapState {
   world: string | null;
@@ -55,7 +48,7 @@ class XaeroMapViewer {
   
   private idleUpgradeQueue: {x: number, z: number}[] = [];
   private idleUpgradeInProgress: boolean = false;
-  private static readonly IDLE_UPGRADE_BATCH_SIZE = 16;
+  private idleUpgradeBatchSize: number = 16;
   private static readonly IDLE_UPGRADE_DELAY_MS = 100;
   
   private loadingRegionStartTime: Map<string, number> = new Map();
@@ -63,7 +56,6 @@ class XaeroMapViewer {
   private timeoutCheckInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
-    this.loadServerConfig();
     this.loadConcurrentSetting();
     
     const canvas = document.getElementById('mapCanvas') as HTMLCanvasElement;
@@ -121,16 +113,6 @@ class XaeroMapViewer {
     }, 100);
   }
   
-  private loadServerConfig(): void {
-    const savedServer = localStorage.getItem(STORAGE_KEY_SERVER);
-    currentServer = savedServer || getDefaultServer();
-    API_BASE = `${window.location.protocol}//${currentServer}/api`;
-    WS_BASE = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${currentServer}`;
-    const serverInput = document.getElementById('serverInput') as HTMLInputElement;
-    if (serverInput) serverInput.value = currentServer;
-    this.updateCurrentServerDisplay(currentServer);
-  }
-  
   private saveMapState(): void {
     const viewState = this.renderer.getViewState();
     const state: MapState = {
@@ -161,35 +143,6 @@ class XaeroMapViewer {
   private saveConcurrentSetting(): void {
     localStorage.setItem(STORAGE_KEY_CONCURRENT, String(this.concurrentLoads));
   }
-  
-  private updateCurrentServerDisplay(server: string): void {
-    const currentServerEl = document.getElementById('currentServer');
-    if (currentServerEl) {
-      currentServerEl.textContent = `当前: ${server}`;
-    }
-  }
-  
-  private setServerAddress(address: string): void {
-    if (!address) {
-      alert('请输入服务端地址');
-      return;
-    }
-    
-    currentServer = address;
-    API_BASE = `${window.location.protocol}//${address}/api`;
-    WS_BASE = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${address}`;
-    localStorage.setItem(STORAGE_KEY_SERVER, address);
-    this.updateCurrentServerDisplay(address);
-    this.updateStatus('正在连接服务器...');
-    
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
-    this.connectWebSocket();
-    
-    this.loadCachedDirectory();
-  }
 
   private startAutoLoad(): void {
     // 已优化：移除无条件定时器
@@ -201,17 +154,11 @@ class XaeroMapViewer {
     // 无需额外的定时器轮询
   }
 
-  private loadCachedDirectory(): void {
-    this.loadWorlds();
-  }
-
   private setupUI(): void {
     const worldSelector = document.getElementById('worldSelector') as HTMLSelectElement;
     const dimSelector = document.getElementById('dimSelector') as HTMLSelectElement;
     const mapTypeSelector = document.getElementById('mapTypeSelector') as HTMLSelectElement;
     const zoomSlider = document.getElementById('zoomSlider') as HTMLInputElement;
-    const setServerBtn = document.getElementById('setServerBtn') as HTMLButtonElement;
-    const serverInput = document.getElementById('serverInput') as HTMLInputElement;
     const toggleSidebar = document.getElementById('toggleSidebar');
     const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('sidebarOverlay');
@@ -223,7 +170,6 @@ class XaeroMapViewer {
       const value = parseFloat((e.target as HTMLInputElement).value);
       this.renderer.setScale(Math.pow(2, value));
     });
-    setServerBtn?.addEventListener('click', () => this.setServerAddress(serverInput.value));
     
     toggleSidebar?.addEventListener('click', () => {
       sidebar?.classList.toggle('open');
@@ -267,11 +213,7 @@ class XaeroMapViewer {
       this.preserveViewAndReload();
     });
     
-    const setCacheDirBtn = document.getElementById('setCacheDirBtn') as HTMLButtonElement;
-    const cacheDirInput = document.getElementById('cacheDirInput') as HTMLInputElement;
     const clearCacheBtn = document.getElementById('clearCacheBtn') as HTMLButtonElement;
-    
-    setCacheDirBtn?.addEventListener('click', () => this.setCacheDirectory(cacheDirInput.value));
     clearCacheBtn?.addEventListener('click', () => this.clearCache());
     
     const concurrentSlider = document.getElementById('concurrentSlider') as HTMLInputElement;
@@ -288,7 +230,6 @@ class XaeroMapViewer {
       });
     }
     
-    this.loadCacheDirectory();
     this.loadCacheSize();
     
     this.loadWaypointSettings();
@@ -305,6 +246,8 @@ class XaeroMapViewer {
       if (response.ok) {
         const config = await response.json();
         const numWorkers = config.numWorkers || 4;
+        
+        this.idleUpgradeBatchSize = numWorkers;
         
         const concurrentSlider = document.getElementById('concurrentSlider') as HTMLInputElement;
         if (concurrentSlider) {
@@ -909,21 +852,6 @@ class XaeroMapViewer {
     }
   }
 
-  private async loadCacheDirectory(): Promise<void> {
-    try {
-      const response = await fetch(`${API_BASE}/cache-directory`);
-      if (response.ok) {
-        const data = await response.json();
-        const cacheDirInput = document.getElementById('cacheDirInput') as HTMLInputElement;
-        if (cacheDirInput && data.directory) {
-          cacheDirInput.value = data.directory;
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
   private formatCacheSize(sizeMB: number): string {
     if (sizeMB < 1024) {
       return `${sizeMB} MB`;
@@ -957,31 +885,6 @@ class XaeroMapViewer {
         }
       }
     }, 100);
-  }
-
-  private async setCacheDirectory(directory: string): Promise<void> {
-    if (!directory) {
-      alert('请输入缓存目录路径');
-      return;
-    }
-    
-    try {
-      const response = await fetch(`${API_BASE}/set-cache-directory`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ directory })
-      });
-      
-      if (!response.ok) {
-        const error = await response.json();
-        alert(error.error || '设置缓存目录失败');
-        return;
-      }
-      
-      alert('缓存目录已设置');
-    } catch (error) {
-      alert('设置缓存目录失败: ' + error);
-    }
   }
 
   private async clearCache(): Promise<void> {
@@ -1496,7 +1399,7 @@ class XaeroMapViewer {
     this.idleUpgradeInProgress = true;
     
     const availableSlots = this.concurrentLoads - this.loadingRegions.size;
-    const batchSize = Math.min(availableSlots, XaeroMapViewer.IDLE_UPGRADE_BATCH_SIZE, this.idleUpgradeQueue.length);
+    const batchSize = Math.min(availableSlots, this.idleUpgradeBatchSize, this.idleUpgradeQueue.length);
     
     if (batchSize === 0) {
       setTimeout(() => this.processIdleUpgrade(), XaeroMapViewer.IDLE_UPGRADE_DELAY_MS);
@@ -1799,7 +1702,7 @@ class XaeroMapViewer {
       this.ws.onopen = () => {
         this.wsConnected = true;
         console.log('WebSocket connected');
-        this.loadCachedDirectory();
+        this.loadWorlds();
       };
       
       this.ws.onclose = () => {

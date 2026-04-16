@@ -33,7 +33,6 @@ let cacheDirectory = path.join(__dirname, 'cache');
 let currentMapDbPath = '';
 let currentWorld = null;
 
-const USER_CONFIG_FILE = path.join(__dirname, 'config.json');
 const SERVER_CONFIG_FILE = path.join(__dirname, 'server_config.json');
 
 const totalMemoryGB = totalmem() / (1024 * 1024 * 1024);
@@ -61,39 +60,15 @@ function releaseBuffer(buf) {
   }
 }
 
-function loadUserConfig() {
-  try {
-    if (existsSync(USER_CONFIG_FILE)) {
-      const config = JSON.parse(readFileSync(USER_CONFIG_FILE, 'utf-8'));
-      if (config.cacheDirectory) {
-        cacheDirectory = config.cacheDirectory;
-      }
-    }
-    if (!existsSync(USER_CONFIG_FILE)) {
-      saveUserConfig();
-    }
-  } catch (e) {
-    console.log('Failed to load user config:', e.message);
-    saveUserConfig();
-  }
-}
-
-function saveUserConfig() {
-  try {
-    writeFileSync(USER_CONFIG_FILE, JSON.stringify({
-      cacheDirectory
-    }, null, 2));
-  } catch (e) {
-    console.log('Failed to save user config:', e.message);
-  }
-}
-
 function loadServerConfig() {
   try {
     if (existsSync(SERVER_CONFIG_FILE)) {
       const config = JSON.parse(readFileSync(SERVER_CONFIG_FILE, 'utf-8'));
       if (config.mapDirectory) {
         mapDirectory = config.mapDirectory;
+      }
+      if (config.cacheDirectory) {
+        cacheDirectory = config.cacheDirectory;
       }
       if (config.maxCacheEntries) {
         maxMemoryCacheEntries = config.maxCacheEntries;
@@ -117,6 +92,7 @@ function saveServerConfig() {
   try {
     writeFileSync(SERVER_CONFIG_FILE, JSON.stringify({
       mapDirectory,
+      cacheDirectory,
       maxCacheEntries: maxMemoryCacheEntries,
       maxConcurrentLoads,
       maxBatchRegions
@@ -127,7 +103,6 @@ function saveServerConfig() {
 }
 
 loadServerConfig();
-loadUserConfig();
 
 const MAX_MEMORY_CACHE_ENTRIES = maxMemoryCacheEntries;
 const MAX_CONCURRENT_LOADS = maxConcurrentLoads;
@@ -2084,41 +2059,6 @@ function renderRegionToPixelsLocal(regionData, northRegionHeights = null, westRe
 function renderCaveLayersToPixelsLocal(layers) {
   return renderCaveLayersToPixels(layers, BLOCK_COLORS, BIOME_COLORS, 0);
 }
-
-app.post('/api/set-cache-directory', async (req, res) => {
-  const { directory } = req.body;
-  
-  if (!directory) {
-    return res.status(400).json({ error: '请提供缓存目录路径' });
-  }
-  
-  try {
-    if (!existsSync(directory)) {
-      await mkdir(directory, { recursive: true });
-    }
-    
-    cacheDirectory = directory;
-    
-    currentWorld = null;
-    if (dbWorker) {
-      try {
-        dbWorker.terminate();
-      } catch {}
-      dbWorker = null;
-    }
-    clearMemoryCache();
-    
-    saveUserConfig();
-    
-    res.json({ success: true, directory: cacheDirectory });
-  } catch (error) {
-    res.status(500).json({ error: `无法创建缓存目录: ${error.message}` });
-  }
-});
-
-app.get('/api/cache-directory', (req, res) => {
-  res.json({ directory: cacheDirectory });
-});
 
 app.get('/api/config', (req, res) => {
   res.json({

@@ -23,14 +23,6 @@
         </div>
         <div class="section-content">
           <div class="control-group">
-            <label>服务端地址</label>
-            <div class="input-row">
-              <input type="text" id="serverInput" placeholder="例如: localhost:3001">
-              <button id="setServerBtn">连接</button>
-            </div>
-            <div class="hint" id="currentServer">当前: localhost:3001</div>
-          </div>
-          <div class="control-group">
             <div class="inline-label">
               <label>并发加载</label>
               <span id="concurrentValue" class="value">256</span>
@@ -40,16 +32,13 @@
         </div>
       </div>
       
-      <div class="section" data-section="directory">
-        <div class="section-title" data-toggle="directory">
+      <div class="section" data-section="cache">
+        <div class="section-title" data-toggle="cache">
           <span class="toggle-icon">▼</span>
           <span>缓存设置</span>
         </div>
         <div class="section-content">
           <div class="control-group">
-            <label>缓存目录</label>
-            <input type="text" id="cacheDirInput" placeholder="默认: server/cache">
-            <button id="setCacheDirBtn" class="btn-confirm">确认更改目录</button>
             <div class="cache-info">
               <span id="cacheSize">计算中...</span>
               <button id="clearCacheBtn">清除缓存</button>
