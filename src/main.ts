@@ -664,23 +664,41 @@ class XaeroMapViewer {
     const ctxGotoOverworld = document.getElementById('ctxGotoOverworld');
     const ctxCopyCoords = document.getElementById('ctxCopyCoords');
 
-    document.addEventListener('click', () => {
+    const closeMenu = () => {
       contextMenu?.classList.remove('open');
+    };
+
+    document.addEventListener('click', closeMenu);
+    document.addEventListener('touchstart', (e) => {
+      if (contextMenu?.classList.contains('open')) {
+        const target = e.target as HTMLElement;
+        if (!contextMenu.contains(target)) {
+          closeMenu();
+        }
+      }
+    }, { passive: true });
+
+    contextMenu?.addEventListener('click', (e) => {
+      e.stopPropagation();
     });
+
+    contextMenu?.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+    }, { passive: true });
 
     ctxGotoNether?.addEventListener('click', () => {
       this.gotoNether();
-      contextMenu?.classList.remove('open');
+      closeMenu();
     });
 
     ctxGotoOverworld?.addEventListener('click', () => {
       this.gotoOverworld();
-      contextMenu?.classList.remove('open');
+      closeMenu();
     });
 
     ctxCopyCoords?.addEventListener('click', () => {
       this.copyContextCoords();
-      contextMenu?.classList.remove('open');
+      closeMenu();
     });
   }
 
@@ -725,9 +743,34 @@ class XaeroMapViewer {
       }
     }
 
-    contextMenu.style.left = `${screenX}px`;
-    contextMenu.style.top = `${screenY}px`;
+    contextMenu.style.left = '0px';
+    contextMenu.style.top = '0px';
     contextMenu.classList.add('open');
+
+    const menuWidth = contextMenu.offsetWidth;
+    const menuHeight = contextMenu.offsetHeight;
+    const windowWidth = window.innerWidth;
+    const windowHeight = window.innerHeight;
+    const padding = 8;
+
+    let finalX = screenX;
+    let finalY = screenY;
+
+    if (finalX + menuWidth + padding > windowWidth) {
+      finalX = windowWidth - menuWidth - padding;
+    }
+    if (finalX < padding) {
+      finalX = padding;
+    }
+    if (finalY + menuHeight + padding > windowHeight) {
+      finalY = windowHeight - menuHeight - padding;
+    }
+    if (finalY < padding) {
+      finalY = padding;
+    }
+
+    contextMenu.style.left = `${finalX}px`;
+    contextMenu.style.top = `${finalY}px`;
   }
 
   private isNetherDimension(): boolean {

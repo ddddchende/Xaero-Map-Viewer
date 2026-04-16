@@ -87,6 +87,9 @@ export class MapRenderer {
   private touchStartX: number = 0;
   private touchStartY: number = 0;
   private isTouchMoved: boolean = false;
+  private longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  private longPressTriggered: boolean = false;
+  private static readonly LONG_PRESS_DURATION = 500;
   
   private currentDim: string | null = null;
   
@@ -428,6 +431,7 @@ export class MapRenderer {
       this.touchStartX = e.touches[0].clientX;
       this.touchStartY = e.touches[0].clientY;
       this.isTouchMoved = false;
+      this.longPressTriggered = false;
       
       const rect = this.canvas.getBoundingClientRect();
       const touchX = e.touches[0].clientX - rect.left;
@@ -436,7 +440,13 @@ export class MapRenderer {
       this.mouseWorldZ = Math.floor((touchY - this.offsetZ) / this.scale);
       this.updateCoordsDisplay(this.mouseWorldX, this.mouseWorldZ);
       this.scheduleRender();
+      
+      this.clearLongPressTimer();
+      this.longPressTimer = setTimeout(() => {
+        this.triggerLongPress();
+      }, MapRenderer.LONG_PRESS_DURATION);
     } else if (e.touches.length === 2) {
+      this.clearLongPressTimer();
       this.isDragging = false;
       this.isTouchMoved = true;
       this.touchStartDistance = this.getTouchDistance(e.touches);
@@ -455,6 +465,11 @@ export class MapRenderer {
       const deltaY = e.touches[0].clientY - this.touchStartY;
       if (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10) {
         this.isTouchMoved = true;
+        this.clearLongPressTimer();
+      }
+      
+      if (this.longPressTriggered) {
+        return;
       }
       
       const rect = this.canvas.getBoundingClientRect();
@@ -505,8 +520,10 @@ export class MapRenderer {
   }
 
   private handleTouchEnd(e: TouchEvent): void {
+    this.clearLongPressTimer();
+    
     if (e.touches.length === 0) {
-      if (!this.isTouchMoved) {
+      if (!this.isTouchMoved && !this.longPressTriggered) {
         const rect = this.canvas.getBoundingClientRect();
         const touchX = this.touchStartX - rect.left;
         const touchY = this.touchStartY - rect.top;
@@ -524,6 +541,7 @@ export class MapRenderer {
       
       this.isDragging = false;
       this.isTouchMoved = false;
+      this.longPressTriggered = false;
       this.touchStartDistance = null;
       this.touchStartScale = null;
     } else if (e.touches.length === 1) {
@@ -532,6 +550,33 @@ export class MapRenderer {
       this.lastTouchY = e.touches[0].clientY;
       this.touchStartDistance = null;
       this.touchStartScale = null;
+    }
+  }
+
+  private clearLongPressTimer(): void {
+    if (this.longPressTimer) {
+      clearTimeout(this.longPressTimer);
+      this.longPressTimer = null;
+    }
+  }
+
+  private triggerLongPress(): void {
+    this.longPressTriggered = true;
+    this.isDragging = false;
+    
+    if (navigator.vibrate) {
+      navigator.vibrate(50);
+    }
+    
+    const rect = this.canvas.getBoundingClientRect();
+    const touchX = this.touchStartX - rect.left;
+    const touchY = this.touchStartY - rect.top;
+    
+    const worldX = Math.floor((touchX - this.offsetX) / this.scale);
+    const worldZ = Math.floor((touchY - this.offsetZ) / this.scale);
+    
+    if (this.onContextMenuCallback) {
+      this.onContextMenuCallback(worldX, worldZ, this.touchStartX, this.touchStartY);
     }
   }
 
