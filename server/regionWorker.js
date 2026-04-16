@@ -1,7 +1,6 @@
 import { parentPort, workerData } from 'worker_threads';
 import { existsSync } from 'fs';
 import path from 'path';
-import { LRUCache } from './lru-cache.js';
 import {
   DEFAULT_BIOME,
   computeBlockColor,
@@ -22,19 +21,35 @@ import {
 const BLOCK_COLORS = workerData?.blockColors || {};
 const BIOME_COLORS = workerData?.biomeColors || {};
 
-const MAX_HEIGHT_CACHE = 256;
-const heightCache = new LRUCache(MAX_HEIGHT_CACHE);
+let heightRequestIdCounter = 0;
+const pendingHeightRequests = new Map();
 
 function getHeightCacheKey(dimPath, regionX, regionZ, lod) {
   return `${dimPath}:${regionX},${regionZ}:lod${lod}`;
 }
 
-function getCachedHeight(key) {
-  return heightCache.get(key);
+function requestHeightFromMain(dimPath, regionX, regionZ, lod) {
+  return new Promise((resolve) => {
+    const requestId = heightRequestIdCounter++;
+    pendingHeightRequests.set(requestId, resolve);
+    
+    parentPort.postMessage({
+      type: 'getHeight',
+      requestId,
+      dimPath,
+      regionX,
+      regionZ,
+      lod
+    });
+  });
 }
 
-function setCachedHeight(key, heights) {
-  heightCache.set(key, heights);
+function setHeightToMain(cacheKey, heights) {
+  parentPort.postMessage({
+    type: 'setHeight',
+    cacheKey,
+    heights
+  });
 }
 
 let currentTaskCancelled = false;
@@ -45,6 +60,13 @@ parentPort.on('message', (msg) => {
     if (msg.taskId === currentTaskId) {
       currentTaskCancelled = true;
     }
+  } else if (msg.type === 'heightResponse') {
+    const { requestId, heights, cacheKey } = msg;
+    const resolve = pendingHeightRequests.get(requestId);
+    if (resolve) {
+      pendingHeightRequests.delete(requestId);
+      resolve(heights);
+    }
   }
 });
 
@@ -53,6 +75,8 @@ function isCancelled() {
 }
 
 parentPort.on('message', async (task) => {
+  if (task.type === 'cancel' || task.type === 'heightResponse') return;
+  
   const { taskId, dimPath, regionX, regionZ, caveMode, caveStart, lod } = task;
 
   currentTaskId = taskId;
@@ -85,14 +109,14 @@ parentPort.on('message', async (task) => {
       const westKey = getHeightCacheKey(dimPath, regionX - 1, regionZ, lod);
       const northwestKey = getHeightCacheKey(dimPath, regionX - 1, regionZ - 1, lod);
 
-      northRegionHeights = getCachedHeight(northKey);
+      northRegionHeights = await requestHeightFromMain(dimPath, regionX, regionZ - 1, lod);
       if (!northRegionHeights) {
         const northRegionPath = path.join(dimPath, `${regionX}_${regionZ - 1}.zip`);
         if (existsSync(northRegionPath)) {
           const northRegionData = await loadRegion(dimPath, regionX, regionZ - 1);
           if (northRegionData) {
             northRegionHeights = extractHeightsFromRegion(northRegionData, lod);
-            setCachedHeight(northKey, northRegionHeights);
+            setHeightToMain(northKey, northRegionHeights);
           }
         }
       }
@@ -102,26 +126,31 @@ parentPort.on('message', async (task) => {
         return;
       }
 
-      westRegionHeights = getCachedHeight(westKey);
+      westRegionHeights = await requestHeightFromMain(dimPath, regionX - 1, regionZ, lod);
       if (!westRegionHeights) {
         const westRegionPath = path.join(dimPath, `${regionX - 1}_${regionZ}.zip`);
         if (existsSync(westRegionPath)) {
           const westRegionData = await loadRegion(dimPath, regionX - 1, regionZ);
           if (westRegionData) {
             westRegionHeights = extractHeightsFromRegion(westRegionData, lod);
-            setCachedHeight(westKey, westRegionHeights);
+            setHeightToMain(westKey, westRegionHeights);
           }
         }
       }
 
-      northwestRegionHeights = getCachedHeight(northwestKey);
+      if (isCancelled()) {
+        parentPort.postMessage({ taskId, result: null });
+        return;
+      }
+
+      northwestRegionHeights = await requestHeightFromMain(dimPath, regionX - 1, regionZ - 1, lod);
       if (!northwestRegionHeights) {
         const northwestRegionPath = path.join(dimPath, `${regionX - 1}_${regionZ - 1}.zip`);
         if (existsSync(northwestRegionPath)) {
           const northwestRegionData = await loadRegion(dimPath, regionX - 1, regionZ - 1);
           if (northwestRegionData) {
             northwestRegionHeights = extractHeightsFromRegion(northwestRegionData, lod);
-            setCachedHeight(northwestKey, northwestRegionHeights);
+            setHeightToMain(northwestKey, northwestRegionHeights);
           }
         }
       }

@@ -147,6 +147,9 @@ let taskIdCounter = 0;
 let requestIdCounter = 0;
 let clientIdCounter = 0;
 
+const MAX_HEIGHT_CACHE = 512;
+const sharedHeightCache = new LRUCache(MAX_HEIGHT_CACHE);
+
 function isRegionInAnyViewport(regionX, regionZ) {
   for (const [clientId, viewport] of clientViewports) {
     if (viewport && 
@@ -178,7 +181,24 @@ function initWorkerPool() {
       workerData: { blockColors: BLOCK_COLORS, biomeColors: BIOME_COLORS }
     });
     
-    worker.on('message', ({ taskId, result, error }) => {
+    worker.on('message', (msg) => {
+      if (msg.type === 'getHeight') {
+        const { requestId, dimPath, regionX, regionZ, lod } = msg;
+        const key = `${dimPath}:${regionX},${regionZ}:lod${lod}`;
+        const heights = sharedHeightCache.get(key);
+        worker.postMessage({ type: 'heightResponse', requestId, heights, cacheKey: key });
+        return;
+      }
+      
+      if (msg.type === 'setHeight') {
+        const { cacheKey, heights } = msg;
+        if (heights && heights.length > 0) {
+          sharedHeightCache.set(cacheKey, heights);
+        }
+        return;
+      }
+      
+      const { taskId, result, error } = msg;
       const task = workerTaskId.get(taskId);
       if (task) {
         workerTaskId.delete(taskId);
@@ -207,12 +227,10 @@ function initWorkerPool() {
 }
 
 function processNextTask() {
-  if (taskQueue.length === 0) return;
-  
-  const freeWorkerIndex = workerBusy.findIndex(busy => !busy);
-  if (freeWorkerIndex === -1) return;
-  
   while (taskQueue.length > 0) {
+    const freeWorkerIndex = workerBusy.findIndex(busy => !busy);
+    if (freeWorkerIndex === -1) return;
+    
     const task = taskQueue.shift();
     
     if (cancelledRequests.has(task.requestId)) {
@@ -246,7 +264,6 @@ function processNextTask() {
       caveStart: task.caveStart,
       lod: task.lod
     });
-    break;
   }
 }
 
