@@ -168,7 +168,7 @@ parentPort.on('message', (msg) => {
 if (workerData?.dbPath) {
   try {
     initDatabase(workerData.dbPath);
-    console.log(`[DB Worker] Database initialized: ${workerData.dbPath}`);
+    //console.log(`[DB Worker] Database initialized: ${workerData.dbPath}`);
   } catch (error) {
     console.error(`[DB Worker] Failed to initialize database: ${error.message}`);
   }

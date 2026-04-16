@@ -92,6 +92,7 @@ export class MapRenderer {
   
   private onViewportChangeCallback: ((bounds: ViewportBounds) => void) | null = null;
   private onLodChangeCallback: (() => void) | null = null;
+  private onIdleCallback: (() => void) | null = null;
   private loadedRegionKeys: Set<string> = new Set();
   private pendingRegionKeys: Set<string> = new Set();
   private allRegionKeys: Set<string> = new Set();
@@ -99,6 +100,11 @@ export class MapRenderer {
   
   private renderQueued: boolean = false;
   private currentLodLevel: number = 0;
+  
+  private lastInteractionTime: number = Date.now();
+  private idleCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private isIdle: boolean = false;
+  private static readonly IDLE_THRESHOLD_MS = 800;
   
   private atlasSize: number;
   private slotsPerRow: number;
@@ -165,6 +171,7 @@ export class MapRenderer {
     
     this.setupEventListeners();
     this.resize();
+    this.startIdleCheck();
   }
 
   private createProgram(gl: WebGLRenderingContext, vsSource: string, fsSource: string): WebGLProgram {
@@ -201,6 +208,33 @@ export class MapRenderer {
 
   setOnLodChange(callback: () => void): void {
     this.onLodChangeCallback = callback;
+  }
+
+  setOnIdle(callback: () => void): void {
+    this.onIdleCallback = callback;
+  }
+
+  private markInteraction(): void {
+    this.lastInteractionTime = Date.now();
+    this.isIdle = false;
+  }
+
+  private startIdleCheck(): void {
+    if (this.idleCheckInterval) return;
+    
+    this.idleCheckInterval = setInterval(() => {
+      const timeSinceInteraction = Date.now() - this.lastInteractionTime;
+      if (!this.isIdle && timeSinceInteraction >= MapRenderer.IDLE_THRESHOLD_MS) {
+        this.isIdle = true;
+        if (this.onIdleCallback) {
+          this.onIdleCallback();
+        }
+      }
+    }, 200);
+  }
+
+  getIdleState(): boolean {
+    return this.isIdle;
   }
 
   setCurrentDimension(dim: string | null): void {
@@ -280,6 +314,8 @@ export class MapRenderer {
 
   private handleWheel(e: WheelEvent): void {
     e.preventDefault();
+    this.markInteraction();
+    
     const rect = this.canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
@@ -300,6 +336,7 @@ export class MapRenderer {
   }
 
   private handleMouseDown(e: MouseEvent): void {
+    this.markInteraction();
     if (e.button === 0) {
       this.isDragging = true;
       this.lastMouseX = e.clientX;
@@ -382,6 +419,7 @@ export class MapRenderer {
 
   private handleTouchStart(e: TouchEvent): void {
     e.preventDefault();
+    this.markInteraction();
     
     if (e.touches.length === 1) {
       this.isDragging = true;

@@ -422,7 +422,7 @@ function initDatabaseForWorld(worldName = null) {
   
   initDbWorker(dbPath);
   
-  console.log(`Database initialized for world "${worldName}": ${dbPath}`);
+  //console.log(`Database initialized for world "${worldName}": ${dbPath}`);
 }
 
 function getCacheKey(dimPath, regionX, regionZ, yHeight = null, lod = 0) {
@@ -2206,7 +2206,7 @@ app.get('/api/worlds/:worldName/dimensions/:dimName/regions', async (req, res) =
   try {
     initDatabaseForWorld(worldName);
     let dimPath = path.join(mapDirectory, 'world-map', worldName, dimName);
-    console.log('Loading regions from:', dimPath, 'mapDirectory:', mapDirectory);
+    //console.log('Loading regions from:', dimPath, 'mapDirectory:', mapDirectory);
     if (mapType) {
       dimPath = path.join(dimPath, mapType);
     } else {
@@ -2217,7 +2217,7 @@ app.get('/api/worlds/:worldName/dimensions/:dimName/regions', async (req, res) =
     const caveModeValue = caveMode !== undefined ? parseInt(String(caveMode)) : null;
     const caveStartValue = caveStart !== undefined ? parseInt(String(caveStart)) : null;
     const regions = await listRegions(dimPath, caveModeValue, caveStartValue);
-    console.log('Found', regions.length, 'regions in', dimPath);
+    //console.log('Found', regions.length, 'regions in', dimPath);
     res.json({ regions, mapType: mapType || null });
   } catch (error) {
     console.error('Error loading regions:', error);
@@ -2716,10 +2716,10 @@ async function findXaeroMinimapWaypoints(xaeroPath) {
 
 async function loadWaypointsFromXaeroFile(filePath, setName = 'default', dimension = '') {
   try {
-    console.log('Loading waypoints from:', filePath);
+    //console.log('Loading waypoints from:', filePath);
     const content = readFileSync(filePath, 'utf-8');
     const lines = content.split('\n').filter(line => line.trim());
-    console.log('Found', lines.length, 'lines in file');
+    //console.log('Found', lines.length, 'lines in file');
     const waypoints = [];
     
     for (const line of lines) {
@@ -2729,7 +2729,7 @@ async function loadWaypointsFromXaeroFile(filePath, setName = 'default', dimensi
       }
     }
     
-    console.log('Parsed', waypoints.length, 'waypoints from', filePath);
+    //console.log('Parsed', waypoints.length, 'waypoints from', filePath);
     return waypoints;
   } catch (e) {
     console.log('Error loading waypoints from Xaero file:', e.message);

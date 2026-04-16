@@ -52,6 +52,15 @@ class XaeroMapViewer {
   private pendingWsRequests: Map<number, { resolve: Function; reject: Function }> = new Map();
   private waypoints: Waypoint[] = [];
   private showWaypoints: boolean = true;
+  
+  private idleUpgradeQueue: {x: number, z: number}[] = [];
+  private idleUpgradeInProgress: boolean = false;
+  private static readonly IDLE_UPGRADE_BATCH_SIZE = 16;
+  private static readonly IDLE_UPGRADE_DELAY_MS = 100;
+  
+  private loadingRegionStartTime: Map<string, number> = new Map();
+  private static readonly REQUEST_TIMEOUT_MS = 1000; //区域请求超时1秒
+  private timeoutCheckInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.loadServerConfig();
@@ -62,6 +71,7 @@ class XaeroMapViewer {
     
     this.renderer.setOnViewportChange((bounds) => this.onViewportChange(bounds));
     this.renderer.setOnLodChange(() => this.onLodChange());
+    this.renderer.setOnIdle(() => this.onIdle());
     this.renderer.setOnContextMenu((x, z, screenX, screenY) => this.handleContextMenu(x, z, screenX, screenY));
     
     this.setupUI();
@@ -69,6 +79,46 @@ class XaeroMapViewer {
     this.setupGotoModal();
     this.connectWebSocket();
     this.startAutoLoad();
+    this.startTimeoutCheck();
+  }
+  
+  private startTimeoutCheck(): void {
+    if (this.timeoutCheckInterval) return;
+    
+    this.timeoutCheckInterval = setInterval(() => {
+      this.checkTimeoutRequests();
+    }, 2000);
+  }
+  
+  private checkTimeoutRequests(): void {
+    const now = Date.now();
+    const timedOutRegions: string[] = [];
+    
+    for (const [key, startTime] of this.loadingRegionStartTime) {
+      if (now - startTime > XaeroMapViewer.REQUEST_TIMEOUT_MS) {
+        timedOutRegions.push(key);
+      }
+    }
+    
+    if (timedOutRegions.length === 0) return;
+    
+    console.warn(`请求超时，重新加载 ${timedOutRegions.length} 个区域`);
+    
+    for (const key of timedOutRegions) {
+      this.loadingRegions.delete(key);
+      this.loadingRegionStartTime.delete(key);
+    }
+    
+    this.updatePendingRegions();
+    
+    const regionsToRetry = timedOutRegions.map(key => {
+      const [x, z] = key.split(',').map(Number);
+      return {x, z};
+    });
+    
+    setTimeout(() => {
+      this.loadRegionsBatch(regionsToRetry);
+    }, 100);
   }
   
   private loadServerConfig(): void {
@@ -1278,6 +1328,8 @@ class XaeroMapViewer {
   }
 
   private onViewportChange(bounds: ViewportBounds): void {
+    this.idleUpgradeQueue = [];
+    
     const regionsToRemove = this.getRegionsOutsideViewport(bounds);
     
     if (regionsToRemove.size > 0) {
@@ -1290,9 +1342,11 @@ class XaeroMapViewer {
         }
         this.abortController = new AbortController();
         this.loadingRegions.clear();
+        this.loadingRegionStartTime.clear();
       } else {
         for (const key of regionsToRemove) {
           this.loadingRegions.delete(key);
+          this.loadingRegionStartTime.delete(key);
         }
       }
       this.updatePendingRegions();
@@ -1331,6 +1385,9 @@ class XaeroMapViewer {
 
   private onLodChange(): void {
     this.cancelServerRequest();
+    this.idleUpgradeQueue = [];
+    this.idleUpgradeInProgress = false;
+    this.loadingRegionStartTime.clear();
     
     if (this.abortController) {
       this.abortController.abort();
@@ -1340,6 +1397,81 @@ class XaeroMapViewer {
     this.loadingRegions.clear();
     this.updatePendingRegions();
     this.loadVisibleRegions();
+  }
+
+  private onIdle(): void {
+    if (this.idleUpgradeInProgress) return;
+    if (!this.currentWorld || !this.currentDim) return;
+    
+    const bounds = this.renderer.getViewportBounds();
+    const currentLod = this.renderer.getCurrentLodLevel();
+    const centerRegionX = Math.floor((bounds.startX + bounds.endX) / 2);
+    const centerRegionZ = Math.floor((bounds.startZ + bounds.endZ) / 2);
+    
+    const upgradeCandidates: {x: number, z: number, dist: number}[] = [];
+    
+    for (let x = bounds.startX; x <= bounds.endX; x++) {
+      for (let z = bounds.startZ; z <= bounds.endZ; z++) {
+        const key = `${x},${z}`;
+        if (this.loadingRegions.has(key)) continue;
+        if (this.allRegionSet.size > 0 && !this.allRegionSet.has(key)) continue;
+        
+        const regionLod = this.renderer.getRegionLod(x, z);
+        if (regionLod === undefined) continue;
+        if (regionLod <= currentLod) continue;
+        
+        const dist = Math.abs(x - centerRegionX) + Math.abs(z - centerRegionZ);
+        upgradeCandidates.push({x, z, dist});
+      }
+    }
+    
+    if (upgradeCandidates.length === 0) return;
+    
+    upgradeCandidates.sort((a, b) => a.dist - b.dist);
+    this.idleUpgradeQueue = upgradeCandidates.map(c => ({x: c.x, z: c.z}));
+    
+    this.processIdleUpgrade();
+  }
+
+  private processIdleUpgrade(): void {
+    if (!this.renderer.getIdleState()) {
+      this.idleUpgradeQueue = [];
+      this.idleUpgradeInProgress = false;
+      return;
+    }
+    
+    if (this.idleUpgradeQueue.length === 0) {
+      this.idleUpgradeInProgress = false;
+      return;
+    }
+    
+    if (this.loadingRegions.size >= this.concurrentLoads) {
+      setTimeout(() => this.processIdleUpgrade(), XaeroMapViewer.IDLE_UPGRADE_DELAY_MS);
+      return;
+    }
+    
+    this.idleUpgradeInProgress = true;
+    
+    const availableSlots = this.concurrentLoads - this.loadingRegions.size;
+    const batchSize = Math.min(availableSlots, XaeroMapViewer.IDLE_UPGRADE_BATCH_SIZE, this.idleUpgradeQueue.length);
+    
+    if (batchSize === 0) {
+      setTimeout(() => this.processIdleUpgrade(), XaeroMapViewer.IDLE_UPGRADE_DELAY_MS);
+      return;
+    }
+    
+    const toUpgrade = this.idleUpgradeQueue.splice(0, batchSize);
+    const currentLod = this.renderer.getCurrentLodLevel();
+    
+    this.loadRegionsBatch(toUpgrade, currentLod).then(() => {
+      if (this.renderer.getIdleState() && this.idleUpgradeQueue.length > 0) {
+        setTimeout(() => this.processIdleUpgrade(), XaeroMapViewer.IDLE_UPGRADE_DELAY_MS);
+      } else {
+        this.idleUpgradeInProgress = false;
+      }
+    }).catch(() => {
+      this.idleUpgradeInProgress = false;
+    });
   }
 
   private loadVisibleRegions(): void {
@@ -1444,12 +1576,14 @@ class XaeroMapViewer {
       const key = `${x},${z}`;
       if (this.loadingRegions.has(key)) return;
       this.loadingRegions.add(key);
+      this.loadingRegionStartTime.set(key, Date.now());
       this.updatePendingRegions();
       
       try {
         await this.loadSingleRegionPixels(x, z, signal, lod);
       } finally {
         this.loadingRegions.delete(key);
+        this.loadingRegionStartTime.delete(key);
         this.updatePendingRegions();
         this.loadVisibleRegions();
       }
@@ -1459,8 +1593,11 @@ class XaeroMapViewer {
     const toLoad = regions.filter(r => !this.loadingRegions.has(`${r.x},${r.z}`));
     if (toLoad.length === 0) return;
     
+    const now = Date.now();
     for (const r of toLoad) {
-      this.loadingRegions.add(`${r.x},${r.z}`);
+      const key = `${r.x},${r.z}`;
+      this.loadingRegions.add(key);
+      this.loadingRegionStartTime.set(key, now);
     }
     this.updatePendingRegions();
     
@@ -1507,7 +1644,9 @@ class XaeroMapViewer {
       console.error('Batch load error:', e);
     } finally {
       for (const r of toLoad) {
-        this.loadingRegions.delete(`${r.x},${r.z}`);
+        const key = `${r.x},${r.z}`;
+        this.loadingRegions.delete(key);
+        this.loadingRegionStartTime.delete(key);
       }
       this.updatePendingRegions();
     }
