@@ -143,11 +143,13 @@ class XaeroMapViewer {
   }
 
   private startAutoLoad(): void {
-    window.setInterval(() => {
-      if (this.currentWorld && this.currentDim) {
-        this.loadVisibleRegions();
-      }
-    }, 200);
+    // 已优化：移除无条件定时器
+    // loadVisibleRegions() 已在以下场景被调用：
+    // 1. onViewportChange() - 视口变化时（50ms 防抖）
+    // 2. onLodChange() - LOD 变化时
+    // 3. processRegionsBatch() - 批量加载完成后
+    // 4. loadRegionList() - 初始化时
+    // 无需额外的定时器轮询
   }
 
   private loadCachedDirectory(): void {
@@ -1051,8 +1053,6 @@ class XaeroMapViewer {
     
     if (!this.currentWorld || !this.currentDim) return;
     
-    this.saveMapState();
-    
     this.renderer.clearAllRegions();
     this.allRegions = [];
     this.allRegionSet.clear();
@@ -1110,6 +1110,8 @@ class XaeroMapViewer {
     if (caveStartGroup) {
       caveStartGroup.style.display = this.currentCaveMode === 1 ? 'block' : 'none';
     }
+    
+    this.saveMapState();
     
     this.updateStatus('正在加载地图类型...');
     
