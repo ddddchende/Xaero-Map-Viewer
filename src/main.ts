@@ -43,7 +43,6 @@ class XaeroMapViewer {
   private mapTypes: {name: string, path: string}[] = [];
   private regionAccessTime: Map<string, number> = new Map();
   private abortController: AbortController | null = null;
-  private savedMapState: MapState | null = null;
   private cacheSizeTimeout: ReturnType<typeof setTimeout> | null = null;
   private viewportChangeTimeout: ReturnType<typeof setTimeout> | null = null;
   private lastViewportBounds: ViewportBounds | null = null;
@@ -57,7 +56,6 @@ class XaeroMapViewer {
 
   constructor() {
     this.loadServerConfig();
-    this.loadMapState();
     this.loadConcurrentSetting();
     
     const canvas = document.getElementById('mapCanvas') as HTMLCanvasElement;
@@ -82,17 +80,6 @@ class XaeroMapViewer {
     const serverInput = document.getElementById('serverInput') as HTMLInputElement;
     if (serverInput) serverInput.value = currentServer;
     this.updateCurrentServerDisplay(currentServer);
-  }
-  
-  private loadMapState(): void {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_MAP_STATE);
-      if (saved) {
-        this.savedMapState = JSON.parse(saved);
-      }
-    } catch {
-      this.savedMapState = null;
-    }
   }
   
   private saveMapState(): void {
@@ -955,7 +942,15 @@ class XaeroMapViewer {
       
       this.updateStatus(`找到 ${worlds.length} 个世界`);
       
-      const savedWorld = this.savedMapState?.world;
+      let savedWorld: string | undefined;
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY_MAP_STATE);
+        if (saved) {
+          const state = JSON.parse(saved);
+          savedWorld = state.world;
+        }
+      } catch {}
+      
       const savedWorldExists = savedWorld && worlds.includes(savedWorld);
       
       if (savedWorldExists) {
@@ -1011,7 +1006,17 @@ class XaeroMapViewer {
       
       this.updateStatus(`找到 ${dimensions.length} 个维度`);
       
-      const savedDim = this.savedMapState?.world === this.currentWorld ? this.savedMapState.dim : null;
+      let savedDim: string | null = null;
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY_MAP_STATE);
+        if (saved) {
+          const state = JSON.parse(saved);
+          if (state.world === this.currentWorld) {
+            savedDim = state.dim;
+          }
+        }
+      } catch {}
+      
       const savedDimExists = savedDim && dimensions.some(d => d.path === savedDim);
       
       if (savedDimExists) {
@@ -1065,8 +1070,18 @@ class XaeroMapViewer {
       caveModeGroup.style.display = 'block';
     }
     
-    const savedCaveMode = this.savedMapState?.dim === this.currentDim ? this.savedMapState.caveMode : null;
-    const savedCaveStart = this.savedMapState?.dim === this.currentDim ? this.savedMapState.caveStart : null;
+    let savedCaveMode: number | null = null;
+    let savedCaveStart: number | null = null;
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_MAP_STATE);
+      if (saved) {
+        const state = JSON.parse(saved);
+        if (state.dim === this.currentDim) {
+          savedCaveMode = state.caveMode;
+          savedCaveStart = state.caveStart;
+        }
+      }
+    } catch {}
     
     if (savedCaveMode !== null) {
       this.currentCaveMode = savedCaveMode;
@@ -1126,7 +1141,17 @@ class XaeroMapViewer {
         mapTypeSelector.appendChild(option);
       }
       
-      const savedMapType = this.savedMapState?.dim === this.currentDim ? this.savedMapState.mapType : null;
+      let savedMapType: string | null = null;
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY_MAP_STATE);
+        if (saved) {
+          const state = JSON.parse(saved);
+          if (state.dim === this.currentDim) {
+            savedMapType = state.mapType;
+          }
+        }
+      } catch {}
+      
       const savedMapTypeExists = savedMapType && this.mapTypes.some(m => m.path === savedMapType);
       
       if (savedMapTypeExists) {
@@ -1168,7 +1193,7 @@ class XaeroMapViewer {
 
   private preserveViewAndReload(): void {
     const viewState = this.renderer.getViewState();
-    this.savedMapState = {
+    const state: MapState = {
       scale: viewState.scale,
       centerX: viewState.centerX,
       centerZ: viewState.centerZ,
@@ -1178,6 +1203,7 @@ class XaeroMapViewer {
       caveMode: this.currentCaveMode,
       caveStart: this.currentCaveStart
     };
+    localStorage.setItem(STORAGE_KEY_MAP_STATE, JSON.stringify(state));
     this.loadRegionList();
   }
 
@@ -1224,9 +1250,21 @@ class XaeroMapViewer {
       
       this.updateStatus(`发现 ${this.allRegions.length} 个区域文件`);
       
-      if (this.savedMapState?.scale && this.savedMapState?.centerX !== undefined && this.savedMapState?.centerZ !== undefined) {
-        this.renderer.setViewState(this.savedMapState.scale, this.savedMapState.centerX, this.savedMapState.centerZ);
-        this.savedMapState = null;
+      let savedScale: number | undefined;
+      let savedCenterX: number | undefined;
+      let savedCenterZ: number | undefined;
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY_MAP_STATE);
+        if (saved) {
+          const state = JSON.parse(saved);
+          savedScale = state.scale;
+          savedCenterX = state.centerX;
+          savedCenterZ = state.centerZ;
+        }
+      } catch {}
+      
+      if (savedScale && savedCenterX !== undefined && savedCenterZ !== undefined) {
+        this.renderer.setViewState(savedScale, savedCenterX, savedCenterZ);
       } else if (this.allRegions.length === 0) {
         const currentView = this.renderer.getViewState();
         this.renderer.setViewState(currentView.scale, currentView.centerX, currentView.centerZ);
