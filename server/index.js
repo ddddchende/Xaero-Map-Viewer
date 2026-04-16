@@ -146,7 +146,7 @@ let taskIdCounter = 0;
 let requestIdCounter = 0;
 let clientIdCounter = 0;
 
-const MAX_HEIGHT_CACHE = 512;
+const MAX_HEIGHT_CACHE = 4096;
 const sharedHeightCache = new LRUCache(MAX_HEIGHT_CACHE);
 
 let dbWorker = null;
@@ -456,6 +456,49 @@ async function readPixelCache(dimPath, regionX, regionZ, yHeight = null, lod = 0
   }
   
   return null;
+}
+
+async function batchReadPixelCache(requests) {
+  if (!requests || requests.length === 0) return new Map();
+  
+  const keyToCoord = new Map();
+  const keysToFetch = [];
+  const results = new Map();
+  
+  for (const req of requests) {
+    const key = getCacheKey(req.dimPath, req.regionX, req.regionZ, req.yHeight, req.lod);
+    keyToCoord.set(key, req);
+    
+    const cached = pixelCache.get(key);
+    if (cached !== null) {
+      if (cached && cached.length > 0) {
+        results.set(key, cached);
+      } else {
+        pixelCache.delete(key);
+        keysToFetch.push(key);
+      }
+    } else {
+      keysToFetch.push(key);
+    }
+  }
+  
+  if (keysToFetch.length > 0 && dbWorker) {
+    try {
+      const dbResults = await dbWorkerCall('batchRead', { keys: keysToFetch });
+      if (dbResults) {
+        for (const [key, result] of Object.entries(dbResults)) {
+          if (result && result.found && result.data && result.data.length > 0) {
+            pixelCache.set(key, result.data);
+            results.set(key, result.data);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Database batch read error:', e.message);
+    }
+  }
+  
+  return results;
 }
 
 async function writePixelCache(dimPath, regionX, regionZ, pixels, yHeight = null, lod = 0) {
@@ -1207,8 +1250,27 @@ app.get('/api/batch-regions', async (req, res) => {
     const centerZ = hasViewport ? (vz0 + vz1) / 2 : 0;
     const maxDist = hasViewport ? Math.max(vx1 - vx0, vz1 - vz0) / 2 : 1;
     
+    const cacheRequests = filteredPairs.map(coord => ({
+      dimPath,
+      regionX: coord.x,
+      regionZ: coord.z,
+      yHeight: caveModeValue !== null ? `cave_${caveModeValue}_${caveStartValue || 'auto'}` : null,
+      lod: lodValue
+    }));
+    
+    const cachedResults = await batchReadPixelCache(cacheRequests);
+    
     const results = await Promise.all(
       filteredPairs.map(coord => {
+        const key = getCacheKey(dimPath, coord.x, coord.z, 
+          caveModeValue !== null ? `cave_${caveModeValue}_${caveStartValue || 'auto'}` : null, 
+          lodValue);
+        const cached = cachedResults.get(key);
+        
+        if (cached) {
+          return cached;
+        }
+        
         const dist = hasViewport 
           ? Math.sqrt(Math.pow(coord.x - centerX, 2) + Math.pow(coord.z - centerZ, 2))
           : 0;

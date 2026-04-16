@@ -73,6 +73,35 @@ parentPort.on('message', (msg) => {
       return;
     }
     
+    if (type === 'batchRead') {
+      if (!db || !msg.keys || msg.keys.length === 0) {
+        parentPort.postMessage({ taskId, result: {} });
+        return;
+      }
+      
+      const keys = msg.keys;
+      const placeholders = keys.map(() => '?').join(',');
+      const stmt = db.prepare(`SELECT cache_key, data, compressed FROM region_cache WHERE cache_key IN (${placeholders})`);
+      const rows = stmt.all(...keys);
+      
+      const results = {};
+      const transferBuffers = [];
+      
+      for (const row of rows) {
+        if (row && row.data && row.data.length > 0) {
+          const decompressed = row.compressed ? decompressData(row.data) : row.data;
+          results[row.cache_key] = { data: decompressed, found: true };
+          transferBuffers.push(decompressed.buffer);
+        } else if (row) {
+          const deleteStmt = db.prepare('DELETE FROM region_cache WHERE cache_key = ?');
+          deleteStmt.run(row.cache_key);
+        }
+      }
+      
+      parentPort.postMessage({ taskId, result: results }, transferBuffers);
+      return;
+    }
+    
     if (type === 'write') {
       if (!db) {
         parentPort.postMessage({ taskId, result: false });

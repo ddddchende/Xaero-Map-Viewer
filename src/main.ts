@@ -1360,9 +1360,10 @@ class XaeroMapViewer {
     const centerRegionZ = Math.floor((bounds.startZ + bounds.endZ) / 2);
     
     const currentLod = this.renderer.getCurrentLodLevel();
+    const overviewLod = Math.min(currentLod + 1, 3);
     
     const noDataRegions: {x: number, z: number, dist: number}[] = [];
-    const upgradeRegions: {x: number, z: number, dist: number, loadedLod: number}[] = [];
+    const upgradeRegions: {x: number, z: number, dist: number}[] = [];
     
     for (let x = bounds.startX; x <= bounds.endX; x++) {
       for (let z = bounds.startZ; z <= bounds.endZ; z++) {
@@ -1374,9 +1375,8 @@ class XaeroMapViewer {
         
         if (this.renderer.hasRegion(x, z)) continue;
         
-        const loadedLod = this.renderer.getRegionLod(x, z);
-        if (loadedLod !== undefined) {
-          upgradeRegions.push({x, z, dist, loadedLod});
+        if (this.renderer.hasAnyLod(x, z)) {
+          upgradeRegions.push({x, z, dist});
         } else {
           noDataRegions.push({x, z, dist});
         }
@@ -1388,20 +1388,14 @@ class XaeroMapViewer {
     noDataRegions.sort((a, b) => a.dist - b.dist);
     upgradeRegions.sort((a, b) => a.dist - b.dist);
     
-    const upgradeRegionsToLoad = upgradeRegions
-      .filter(r => r.loadedLod > currentLod)
-      .slice(0, this.concurrentLoads);
-    
-    if (upgradeRegionsToLoad.length > 0) {
-      this.loadRegionsBatch(upgradeRegionsToLoad.map(r => ({x: r.x, z: r.z})), currentLod);
-      return;
-    }
-    
     if (noDataRegions.length > 0) {
       const toLoad = noDataRegions.slice(0, this.concurrentLoads);
-      this.loadRegionsBatch(toLoad.map(r => ({x: r.x, z: r.z})), currentLod);
+      this.loadRegionsBatch(toLoad.map(r => ({x: r.x, z: r.z})), overviewLod);
       return;
     }
+    
+    const toLoad = upgradeRegions.slice(0, this.concurrentLoads);
+    this.loadRegionsBatch(toLoad.map(r => ({x: r.x, z: r.z})), currentLod);
   }
 
   private updatePendingRegions(): void {
