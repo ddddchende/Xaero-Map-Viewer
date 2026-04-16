@@ -5,7 +5,7 @@ import { readdir, mkdir } from 'fs/promises';
 import { existsSync, writeFileSync, readFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { cpus } from 'os';
+import { cpus, totalmem } from 'os';
 import { Worker } from 'worker_threads';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
@@ -36,7 +36,9 @@ let currentWorld = null;
 const USER_CONFIG_FILE = path.join(__dirname, 'config.json');
 const SERVER_CONFIG_FILE = path.join(__dirname, 'server_config.json');
 
-let maxMemoryCacheEntries = 64;
+const totalMemoryGB = totalmem() / (1024 * 1024 * 1024);
+let maxMemoryCacheEntries = Math.min(256, Math.floor(totalMemoryGB * 16));
+if (maxMemoryCacheEntries < 64) maxMemoryCacheEntries = 64;
 let maxConcurrentLoads = 32;
 let maxBatchRegions = 64;
 

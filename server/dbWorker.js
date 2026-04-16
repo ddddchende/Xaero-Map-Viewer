@@ -1,6 +1,6 @@
 import { parentPort, workerData } from 'worker_threads';
 import Database from 'better-sqlite3';
-import zlib from 'zlib';
+import { gzipSync, gunzipSync } from 'fflate';
 
 let db = null;
 let dbPath = workerData?.dbPath || null;
@@ -34,11 +34,11 @@ function initDatabase(path) {
 }
 
 function compressData(data) {
-  return zlib.gzipSync(data, { level: 1 });
+  return gzipSync(data, { level: 1 });
 }
 
 function decompressData(data) {
-  return zlib.gunzipSync(data);
+  return gunzipSync(data);
 }
 
 parentPort.on('message', (msg) => {
