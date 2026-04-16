@@ -1,23 +1,35 @@
 # Xaro 地图预览器
 
-一个基于 Web 的 Xaero's World Map 数据查看器，可以在浏览器中浏览和查看 Minecraft 的 Xaero 地图数据。
+<p align="center">
+  <img src="ScreenShot_2026-04-17_072426_108.png" alt="Xaro 地图预览器截图" width="80%">
+</p>
 
-## 功能特性
+一个基于 Web 的 Xaero's World Map 数据查看器，可以在浏览器中流畅浏览和查看 Minecraft 的 Xaero 地图数据。
 
-- **地图浏览** — 流畅地缩放、平移浏览 Xaero's World Map 生成的地图数据
-- **多维度支持** — 支持主世界、下界、末地三个维度的地图查看
+## ✨ 功能特性
+
+### 🗺️ 地图浏览
+- **流畅交互** — 支持缩放、平移浏览 Xaero's World Map 生成的地图数据
+- **多维度支持** — 主世界、下界、末地三个维度一键切换
 - **洞穴模式** — 支持分层和完整两种洞穴渲染模式，可调节 Y 高度
-- **路径点** — 读取并显示 Xaero's Minimap 的路径点数据，支持搜索、筛选和跳转
 - **坐标跳转** — 输入坐标快速定位到地图上的任意位置
-- **维度切换** — 右键菜单支持主世界/下界坐标换算与快速跳转（8:1 比例）
-- **LOD 渲染** — 多级细节渲染，远处区域自动降级，空闲时逐步升级画质
-- **高效缓存** — 基于 SQLite 的双层缓存（内存 LRU + 磁盘持久化），避免重复解析
-- **多线程解析** — 使用 Worker 线程池并行解析区域文件，充分利用多核 CPU
-- **WebSocket 通信** — 前后端通过 WebSocket 进行二进制数据传输，高效低延迟
-- **WebGL 渲染** — 前端使用 WebGL 纹理图集渲染，支持大规模地图数据流畅显示
-- **Minecraft 风格 UI** — 使用 Minecraft 字体和风格的界面设计
+- **维度换算** — 右键菜单支持主世界/下界坐标换算与快速跳转（8:1 比例）
 
-## 技术栈
+### 📍 路径点管理
+- 读取并显示 Xaero's Minimap 的路径点数据
+- 支持搜索、筛选和快速跳转
+
+### ⚡ 性能优化
+- **LOD 渲染** — 多级细节渲染，远处区域自动降级，空闲时逐步升级画质
+- **双层缓存** — 基于 SQLite 的内存 LRU + 磁盘持久化缓存，避免重复解析
+- **多线程解析** — Worker 线程池并行解析区域文件，充分利用多核 CPU
+- **WebSocket 通信** — 前后端二进制数据传输，高效低延迟
+- **WebGL 渲染** — 纹理图集渲染，支持大规模地图数据流畅显示
+
+### 🎮 Minecraft 风格
+- 使用 Minecraft 字体和风格的界面设计
+
+## 🛠️ 技术栈
 
 | 层级 | 技术 |
 |------|------|
@@ -27,13 +39,13 @@
 | 缓存 | better-sqlite3, LRU Cache |
 | 渲染 | Canvas, WebGL 着色器 |
 
-## 环境要求
+## 📋 环境要求
 
 - **Node.js** >= 18
 - **npm** >= 8
 - 支持 WebGL 的现代浏览器
 
-## 快速开始
+## 🚀 快速开始
 
 ### 一键安装（推荐）
 
@@ -66,9 +78,7 @@ npm run build
 npm start
 ```
 
-## 使用方式
-
-### 生产模式
+## 💻 使用方式
 
 双击 `启动.bat` 或运行：
 
@@ -76,27 +86,7 @@ npm start
 npm start
 ```
 
-### 开发模式
-
-前后端同时启动（支持热更新）：
-
-```bash
-npm run dev:all
-```
-
-仅启动前端开发服务器：
-
-```bash
-npm run dev
-```
-
-仅启动后端服务器：
-
-```bash
-npm run dev:server
-```
-
-## 配置说明
+## ⚙️ 配置说明
 
 配置文件位于 `server/server_config.json`：
 
@@ -110,7 +100,7 @@ npm run dev:server
 | `maxConcurrentLoads` | 512 | 最大并发区域加载数 |
 | `maxBatchRegions` | 512 | 最大批量区域请求数 |
 
-## 项目结构
+## 📁 项目结构
 
 ```
 ├── server/                  # 后端服务
@@ -148,7 +138,7 @@ npm run dev:server
 └── setup.bat                # BAT 安装脚本
 ```
 
-## API 接口
+## 🔌 API 接口
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -165,7 +155,7 @@ npm run dev:server
 
 此外，WebSocket 端点支持 `batch-regions` 类型的二进制消息，用于高效批量传输区域数据。
 
-## 地图数据目录
+## 📂 地图数据目录
 
 Xaero 地图数据通常位于：
 
@@ -182,17 +172,20 @@ Xaero 地图数据通常位于：
             └── mw$*.txt     # 路径点文件
 ```
 
-## 常见问题
+## ❓ 常见问题
 
 **Q: 启动后看不到地图？**
+
 确保 `server_config.json` 中的 `mapDirectory` 路径正确指向 Xaero 地图数据目录。
 
 **Q: 地图加载缓慢？**
+
 可以尝试增大 `maxConcurrentLoads` 和 `maxBatchRegions` 的值，或增大 `maxMemoryMB` 以提高缓存命中率。
 
 **Q: 如何清除缓存？**
+
 在侧边栏的"缓存设置"中点击"清除缓存"按钮，或删除 `cacheDirectory` 下的 `.db` 文件。
 
-## 许可证
+## 📄 许可证
 
 本项目仅供学习和个人使用。Xaero's World Map 和 Xaero's Minimap 是 [Xaero96](https://www.curseforge.com/members/xaero96/projects) 的作品。
