@@ -2,13 +2,11 @@ import express from 'express';
 import cors from 'cors';
 import compression from 'compression';
 import { readdir, mkdir } from 'fs/promises';
-import { existsSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, writeFileSync, readFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { cpus } from 'os';
 import { Worker } from 'worker_threads';
-import Database from 'better-sqlite3';
-import zlib from 'zlib';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { LRUCache } from './lru-cache.js';
@@ -32,8 +30,8 @@ app.use(express.static(path.join(__dirname, '../dist')));
 
 let mapDirectory = '';
 let cacheDirectory = path.join(__dirname, 'cache');
-let db = null;
 let currentMapDbPath = '';
+let currentWorld = null;
 
 const USER_CONFIG_FILE = path.join(__dirname, 'config.json');
 const SERVER_CONFIG_FILE = path.join(__dirname, 'server_config.json');
@@ -133,7 +131,6 @@ const MAX_MEMORY_CACHE_ENTRIES = maxMemoryCacheEntries;
 const MAX_CONCURRENT_LOADS = maxConcurrentLoads;
 const MAX_BATCH_REGIONS = maxBatchRegions;
 const pixelCache = new LRUCache(MAX_MEMORY_CACHE_ENTRIES);
-const dbStatements = {};
 
 const NUM_WORKERS = cpus().length;
 const workers = [];
@@ -149,6 +146,10 @@ let clientIdCounter = 0;
 
 const MAX_HEIGHT_CACHE = 512;
 const sharedHeightCache = new LRUCache(MAX_HEIGHT_CACHE);
+
+let dbWorker = null;
+let dbWorkerTaskId = 0;
+const dbWorkerPendingTasks = new Map();
 
 function isRegionInAnyViewport(regionX, regionZ) {
   for (const [clientId, viewport] of clientViewports) {
@@ -224,6 +225,52 @@ function initWorkerPool() {
   }
   
   console.log(`Worker pool initialized with ${NUM_WORKERS} workers`);
+}
+
+function initDbWorker(dbPath) {
+  if (dbWorker) {
+    try {
+      dbWorker.terminate();
+    } catch {}
+    dbWorker = null;
+  }
+  
+  dbWorker = new Worker(path.join(__dirname, 'dbWorker.js'), {
+    workerData: { dbPath }
+  });
+  
+  dbWorker.on('message', (msg) => {
+    const { taskId, result, error } = msg;
+    const task = dbWorkerPendingTasks.get(taskId);
+    if (task) {
+      dbWorkerPendingTasks.delete(taskId);
+      if (error) {
+        task.reject(new Error(error));
+      } else {
+        task.resolve(result);
+      }
+    }
+  });
+  
+  dbWorker.on('error', (err) => {
+    console.error('DB Worker error:', err);
+  });
+  
+  console.log(`Database worker initialized for: ${dbPath}`);
+}
+
+function dbWorkerCall(type, data) {
+  return new Promise((resolve, reject) => {
+    if (!dbWorker) {
+      reject(new Error('DB worker not initialized'));
+      return;
+    }
+    
+    const taskId = ++dbWorkerTaskId;
+    dbWorkerPendingTasks.set(taskId, { resolve, reject });
+    
+    dbWorker.postMessage({ taskId, type, ...data });
+  });
 }
 
 function processNextTask() {
@@ -336,60 +383,44 @@ async function ensureCacheDir() {
   }
 }
 
-function getDbNameForDirectory(dirPath) {
-  if (!dirPath) return 'default';
-  const normalized = path.resolve(dirPath).replace(/[\\/:*?"<>|]/g, '_');
+function getDbNameForWorld(worldName) {
+  if (!worldName) return 'default';
+  const normalized = worldName.replace(/[\\/:*?"<>|]/g, '_');
   const hash = normalized.split('').reduce((acc, char) => ((acc << 5) - acc + char.charCodeAt(0)) | 0, 0);
-  return `${Math.abs(hash).toString(16)}_${path.basename(dirPath).substring(0, 32)}`;
+  return `${Math.abs(hash).toString(16)}_${normalized.substring(0, 48)}`;
 }
 
-function initDatabase(forMapDirectory = null) {
-  if (db) {
+function initDatabaseForWorld(worldName = null) {
+  if (currentWorld === worldName && dbWorker) {
+    return;
+  }
+  
+  currentWorld = worldName;
+  
+  if (dbWorker) {
     try {
-      db.close();
+      dbWorker.terminate();
     } catch {}
-    db = null;
+    dbWorker = null;
   }
   
   clearMemoryCache();
   
-  const dbName = getDbNameForDirectory(forMapDirectory);
+  if (!existsSync(cacheDirectory)) {
+    try {
+      mkdirSync(cacheDirectory, { recursive: true });
+    } catch (e) {
+      console.error('Failed to create cache directory:', e.message);
+    }
+  }
+  
+  const dbName = getDbNameForWorld(worldName);
   const dbPath = path.join(cacheDirectory, `${dbName}.db`);
   currentMapDbPath = dbPath;
   
-  db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = OFF');
-  db.pragma('cache_size = -256000');
-  db.pragma('temp_store = MEMORY');
-  db.pragma('mmap_size = 536870912');
-  db.pragma('locking_mode = EXCLUSIVE');
+  initDbWorker(dbPath);
   
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS region_cache (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      cache_key TEXT UNIQUE NOT NULL,
-      data BLOB NOT NULL,
-      compressed INTEGER DEFAULT 1,
-      created_at INTEGER DEFAULT (strftime('%s', 'now')),
-      accessed_at INTEGER DEFAULT (strftime('%s', 'now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_cache_key ON region_cache(cache_key);
-  `);
-  
-  dbStatements.read = db.prepare('SELECT data, compressed FROM region_cache WHERE cache_key = ?');
-  dbStatements.write = db.prepare('INSERT OR REPLACE INTO region_cache (cache_key, data, compressed) VALUES (?, ?, 1)');
-  dbStatements.delete = db.prepare('DELETE FROM region_cache WHERE cache_key = ?');
-  
-  console.log(`Database initialized: ${dbPath}`);
-}
-
-function compressData(data) {
-  return zlib.gzipSync(data, { level: 1 });
-}
-
-function decompressData(data) {
-  return zlib.gunzipSync(data);
+  console.log(`Database initialized for world "${worldName}": ${dbPath}`);
 }
 
 function getCacheKey(dimPath, regionX, regionZ, yHeight = null, lod = 0) {
@@ -410,25 +441,15 @@ async function readPixelCache(dimPath, regionX, regionZ, yHeight = null, lod = 0
     pixelCache.delete(key);
   }
   
-  if (db && dbStatements.read) {
+  if (dbWorker) {
     try {
-      const row = dbStatements.read.get(key);
-      if (row && row.data && row.data.length > 0) {
-        const data = row.compressed ? decompressData(row.data) : row.data;
-        if (!data || data.length === 0) {
-          dbStatements.delete.run(key);
-          return null;
-        }
-        pixelCache.set(key, data);
-        return data;
-      } else if (row) {
-        dbStatements.delete.run(key);
+      const result = await dbWorkerCall('read', { key });
+      if (result && result.found && result.data && result.data.length > 0) {
+        pixelCache.set(key, result.data);
+        return result.data;
       }
     } catch (e) {
       console.error('Database read error:', e.message);
-      try {
-        dbStatements.delete.run(key);
-      } catch {}
     }
   }
   
@@ -441,10 +462,9 @@ async function writePixelCache(dimPath, regionX, regionZ, pixels, yHeight = null
   const key = getCacheKey(dimPath, regionX, regionZ, yHeight, lod);
   pixelCache.set(key, pixels);
   
-  if (db && dbStatements.write) {
+  if (dbWorker) {
     try {
-      const compressed = compressData(pixels);
-      dbStatements.write.run(key, compressed);
+      await dbWorkerCall('write', { key, data: pixels });
     } catch (e) {
       console.error('Database write error:', e.message);
     }
@@ -949,7 +969,14 @@ app.post('/api/set-cache-directory', async (req, res) => {
     
     cacheDirectory = directory;
     
-    initDatabase(mapDirectory);
+    currentWorld = null;
+    if (dbWorker) {
+      try {
+        dbWorker.terminate();
+      } catch {}
+      dbWorker = null;
+    }
+    clearMemoryCache();
     
     saveUserConfig();
     
@@ -973,11 +1000,10 @@ app.get('/api/config', (req, res) => {
 
 app.get('/api/cache-size', async (req, res) => {
   try {
-    if (db) {
-      const row = db.prepare('SELECT COUNT(*) as count FROM region_cache').get();
-      const sizeRow = db.prepare('SELECT SUM(LENGTH(data)) as totalSize FROM region_cache').get();
-      const count = row?.count || 0;
-      const totalSize = sizeRow?.totalSize || 0;
+    if (dbWorker) {
+      const stats = await dbWorkerCall('getStats', {});
+      const count = stats?.count || 0;
+      const totalSize = stats?.totalSize || 0;
       const sizeMB = (totalSize / (1024 * 1024)).toFixed(2);
       res.json({ count, sizeMB: parseFloat(sizeMB) });
     } else {
@@ -992,9 +1018,8 @@ app.delete('/api/cache-directory', async (req, res) => {
   try {
     pixelCache.clear();
     
-    if (db) {
-      db.exec('DELETE FROM region_cache');
-      db.exec('VACUUM');
+    if (dbWorker) {
+      await dbWorkerCall('clearAll', {});
     }
     
     res.json({ success: true, message: '缓存已清除' });
@@ -1023,6 +1048,7 @@ app.get('/api/worlds', async (req, res) => {
 app.get('/api/worlds/:worldName/dimensions', async (req, res) => {
   const { worldName } = req.params;
   try {
+    initDatabaseForWorld(worldName);
     const worldMapPath = path.join(mapDirectory, 'world-map', worldName);
     const dimensions = await listDimensions(worldMapPath);
     res.json(dimensions);
@@ -1034,6 +1060,7 @@ app.get('/api/worlds/:worldName/dimensions', async (req, res) => {
 app.get('/api/worlds/:worldName/dimensions/:dimName/map-types', async (req, res) => {
   const { worldName, dimName } = req.params;
   try {
+    initDatabaseForWorld(worldName);
     const dimPath = path.join(mapDirectory, 'world-map', worldName, dimName);
     const mapTypes = await listMapTypes(dimPath);
     res.json(mapTypes);
@@ -1047,6 +1074,7 @@ app.get('/api/worlds/:worldName/dimensions/:dimName/regions', async (req, res) =
   const { mapType, caveMode, caveStart } = req.query;
   
   try {
+    initDatabaseForWorld(worldName);
     let dimPath = path.join(mapDirectory, 'world-map', worldName, dimName);
     console.log('Loading regions from:', dimPath, 'mapDirectory:', mapDirectory);
     if (mapType) {
@@ -1075,6 +1103,7 @@ app.get('/api/region-pixels', async (req, res) => {
   }
   
   try {
+    initDatabaseForWorld(String(world));
     let dimPath = path.join(mapDirectory, 'world-map', String(world), String(dim));
     if (mapType) {
       dimPath = path.join(dimPath, String(mapType));
@@ -1116,6 +1145,8 @@ app.get('/api/batch-regions', async (req, res) => {
   if (!dim || !coords) {
     return res.status(400).json({ error: '缺少参数' });
   }
+  
+  initDatabaseForWorld(String(world));
   
   const requestId = clientRequestId !== undefined ? parseInt(String(clientRequestId)) : requestIdCounter++;
   let isCancelled = false;
@@ -1719,6 +1750,8 @@ async function handleWsMessage(ws, msg) {
       return;
     }
     
+    initDatabaseForWorld(world);
+    
     const clientId = ws.clientId;
     const lodValue = lod !== undefined ? parseInt(lod) : 0;
     
@@ -1826,11 +1859,10 @@ async function handleWsMessage(ws, msg) {
 
 server.listen(PORT, async () => {
   await ensureCacheDir();
-  initDatabase(mapDirectory || null);
   initWorkerPool();
   console.log(`Xaero Map Server running at http://localhost:${PORT}`);
   console.log(`WebSocket server ready at ws://localhost:${PORT}`);
   console.log(`Default directory: ${mapDirectory || '(not set)'}`);
-  console.log(`Cache database: ${currentMapDbPath}`);
+  console.log(`Cache directory: ${cacheDirectory}`);
   console.log(`Config: maxCacheEntries=${MAX_MEMORY_CACHE_ENTRIES}, maxConcurrentLoads=${MAX_CONCURRENT_LOADS}, maxBatchRegions=${MAX_BATCH_REGIONS}`);
 });
