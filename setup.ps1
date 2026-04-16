@@ -1,6 +1,37 @@
 ﻿$ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
+function Invoke-NpmCommand {
+    param([string]$Arguments)
+    $stdoutFile = "$env:TEMP\npm-stdout.txt"
+    $stderrFile = "$env:TEMP\npm-stderr.txt"
+    
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "cmd.exe"
+    $psi.Arguments = "/c npm $Arguments 2>`"$stderrFile`" >`"$stdoutFile`""
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    
+    $process = [System.Diagnostics.Process]::Start($psi)
+    $process.WaitForExit()
+    $exitCode = $process.ExitCode
+    
+    if (Test-Path $stdoutFile) {
+        Get-Content $stdoutFile | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+        Remove-Item $stdoutFile -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $stderrFile) {
+        $stderr = Get-Content $stderrFile -Raw
+        if ($stderr -match "warn|deprecated") {
+            Write-Host "  [!] npm 警告: 部分依赖已弃用，不影响使用" -ForegroundColor Yellow
+        } elseif ($stderr -match "error|ERR!") {
+            Write-Host "  $stderr" -ForegroundColor Red
+        }
+        Remove-Item $stderrFile -Force -ErrorAction SilentlyContinue
+    }
+    return $exitCode
+}
+
 function Write-Title($text) {
     Write-Host ""
     Write-Host "============================================" -ForegroundColor Cyan
@@ -100,8 +131,8 @@ if (Test-Path "node_modules") {
         Write-Ok "跳过依赖安装"
     } else {
         Write-Host "  正在安装依赖，请稍候..." -ForegroundColor White
-        npm install 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
-        if ($LASTEXITCODE -ne 0) {
+        $exitCode = Invoke-NpmCommand "install"
+        if ($exitCode -ne 0) {
             Write-Fail "依赖安装失败，请检查网络连接"
             Read-Host "按回车退出"
             exit 1
@@ -110,8 +141,8 @@ if (Test-Path "node_modules") {
     }
 } else {
     Write-Host "  正在安装依赖，请稍候..." -ForegroundColor White
-    npm install 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
-    if ($LASTEXITCODE -ne 0) {
+    $exitCode = Invoke-NpmCommand "install"
+    if ($exitCode -ne 0) {
         Write-Fail "依赖安装失败，请检查网络连接"
         Read-Host "按回车退出"
         exit 1
@@ -220,8 +251,8 @@ if (Test-Path "dist\index.html") {
     $rebuild = Read-Default "是否重新构建? (y/n)" "n"
     if ($rebuild -eq "y") {
         Write-Host "  正在构建，请稍候..." -ForegroundColor White
-        npm run build 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
-        if ($LASTEXITCODE -ne 0) {
+        $exitCode = Invoke-NpmCommand "run build"
+        if ($exitCode -ne 0) {
             Write-Fail "构建失败，请检查 TypeScript 错误"
         } else {
             Write-Ok "构建完成"
@@ -233,8 +264,8 @@ if (Test-Path "dist\index.html") {
     $build = Read-Default "是否立即构建前端? (y/n)" "y"
     if ($build -eq "y") {
         Write-Host "  正在构建，请稍候..." -ForegroundColor White
-        npm run build 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
-        if ($LASTEXITCODE -ne 0) {
+        $exitCode = Invoke-NpmCommand "run build"
+        if ($exitCode -ne 0) {
             Write-Fail "构建失败，请检查 TypeScript 错误"
         } else {
             Write-Ok "构建完成"
