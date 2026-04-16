@@ -5,27 +5,95 @@ import path from 'path';
 
 export const DEFAULT_BIOME = { grass: 0x91bd59, foliage: 0x77ab2f, water: 0x3f76e4 };
 
-export function computeBlockColor(state, biome, overlays, blockColors, biomeColors) {
+const LIGHT_MIN = 9;
+
+function getBlockBrightness(light, sun) {
+  return (LIGHT_MIN + Math.max(sun, light)) / (15.0 + LIGHT_MIN);
+}
+
+function getPixelLight(light) {
+  if (light === 0) return 0.0;
+  return getBlockBrightness(light, 0);
+}
+
+function getWaterTransparency() {
+  return 191;
+}
+
+function getWaterColor(biome, biomeColors) {
+  const waterBiomeColor = (biomeColors[biome] || DEFAULT_BIOME).water;
+  const waterBaseR = 63;
+  const waterBaseG = 118;
+  const waterBaseB = 228;
+  
+  const brightnessR = waterBaseR / 255.0;
+  const brightnessG = waterBaseG / 255.0;
+  const brightnessB = waterBaseB / 255.0;
+  
+  const biomeR = (waterBiomeColor >> 16) & 0xFF;
+  const biomeG = (waterBiomeColor >> 8) & 0xFF;
+  const biomeB = waterBiomeColor & 0xFF;
+  
+  const grayBase = 0.6;
+  const r = Math.floor((biomeR * brightnessR + 128 * grayBase) / (1 + grayBase));
+  const g = Math.floor((biomeG * brightnessG + 140 * grayBase) / (1 + grayBase));
+  const b = Math.floor((biomeB * brightnessB + 160 * grayBase) / (1 + grayBase));
+  
+  return (r << 16) | (g << 8) | b;
+}
+
+export function computeBlockColor(state, biome, overlays, blockColors, biomeColors, blockLight = 15) {
   if (!state || state === 'minecraft:air') {
     if (overlays && overlays.length > 0) {
-      const topOverlay = overlays[overlays.length - 1];
-      const overlayInfo = blockColors[topOverlay.state];
-      if (overlayInfo) {
+      let overlayRed = 0;
+      let overlayGreen = 0;
+      let overlayBlue = 0;
+      let currentTransparencyMultiplier = 1.0;
+      let sun = 15;
+      
+      for (let i = 0; i < overlays.length; i++) {
+        const overlay = overlays[i];
+        const overlayInfo = blockColors[overlay.state];
+        if (!overlayInfo) continue;
+        
         let overlayColor = overlayInfo.color;
+        let overlayAlpha;
+        
         if (overlayInfo.water) {
-          const biomeColor = biomeColors[biome] || DEFAULT_BIOME;
-          overlayColor = biomeColor.water;
+          overlayColor = getWaterColor(biome, biomeColors);
+          overlayAlpha = getWaterTransparency() / 255.0;
+        } else {
+          overlayAlpha = getPixelLight(overlay.light ?? 15);
         }
-        const alpha = Math.floor((topOverlay.opacity / 15) * 255);
-        return { color: overlayColor, alpha };
+        
+        const overlayR = (overlayColor >> 16) & 0xFF;
+        const overlayG = (overlayColor >> 8) & 0xFF;
+        const overlayB = overlayColor & 0xFF;
+        
+        const brightness = getBlockBrightness(overlay.light ?? 15, sun) * overlayAlpha * currentTransparencyMultiplier;
+        
+        overlayRed += overlayR * brightness;
+        overlayGreen += overlayG * brightness;
+        overlayBlue += overlayB * brightness;
+        
+        sun -= overlay.opacity;
+        if (sun < 0) sun = 0;
+        
+        currentTransparencyMultiplier *= (1.0 - overlayAlpha);
       }
+      
+      const r = Math.min(255, Math.floor(overlayRed));
+      const g = Math.min(255, Math.floor(overlayGreen));
+      const b = Math.min(255, Math.floor(overlayBlue));
+      
+      return { color: (r << 16) | (g << 8) | b, alpha: 255, hasOverlay: true };
     }
-    return { color: 0, alpha: 0 };
+    return { color: 0, alpha: 0, hasOverlay: false };
   }
 
   const info = blockColors[state];
   if (!info) {
-    return { color: 0x808080, alpha: 255 };
+    return { color: 0x808080, alpha: 255, hasOverlay: false };
   }
 
   let color = info.color;
@@ -33,58 +101,161 @@ export function computeBlockColor(state, biome, overlays, blockColors, biomeColo
 
   if (info.grass || info.foliage) {
     const biomeColor = biomeColors[biome] || DEFAULT_BIOME;
-    color = info.grass ? biomeColor.grass : biomeColor.foliage;
+    const biomeRGB = info.grass ? biomeColor.grass : biomeColor.foliage;
+    
+    const baseR = (color >> 16) & 0xFF;
+    const baseG = (color >> 8) & 0xFF;
+    const baseB = color & 0xFF;
+    
+    const brightnessR = baseR / 255.0;
+    const brightnessG = baseG / 255.0;
+    const brightnessB = baseB / 255.0;
+    
+    const r = Math.floor(((biomeRGB >> 16) & 0xFF) * brightnessR);
+    const g = Math.floor(((biomeRGB >> 8) & 0xFF) * brightnessG);
+    const b = Math.floor((biomeRGB & 0xFF) * brightnessB);
+    
+    color = (r << 16) | (g << 8) | b;
   }
 
   if (overlays && overlays.length > 0) {
-    for (let i = overlays.length - 1; i >= 0; i--) {
+    let overlayRed = 0;
+    let overlayGreen = 0;
+    let overlayBlue = 0;
+    let currentTransparencyMultiplier = 1.0;
+    let sun = 15;
+    
+    for (let i = 0; i < overlays.length; i++) {
       const overlay = overlays[i];
       const overlayInfo = blockColors[overlay.state];
       if (!overlayInfo) continue;
-
+      
       let overlayColor = overlayInfo.color;
+      let overlayAlpha;
+      
       if (overlayInfo.water) {
-        const biomeColor = biomeColors[biome] || DEFAULT_BIOME;
-        overlayColor = biomeColor.water;
+        overlayColor = getWaterColor(biome, biomeColors);
+        overlayAlpha = getWaterTransparency() / 255.0;
+      } else {
+        overlayAlpha = getPixelLight(overlay.light ?? 15);
       }
-
-      const overlayAlpha = overlay.opacity / 15;
-      const invAlpha = 1 - overlayAlpha;
-
-      const r = Math.floor(((color >> 16) & 0xFF) * invAlpha + ((overlayColor >> 16) & 0xFF) * overlayAlpha);
-      const g = Math.floor(((color >> 8) & 0xFF) * invAlpha + ((overlayColor >> 8) & 0xFF) * overlayAlpha);
-      const b = Math.floor((color & 0xFF) * invAlpha + (overlayColor & 0xFF) * overlayAlpha);
-
-      color = (r << 16) | (g << 8) | b;
-      alpha = 255;
+      
+      const overlayR = (overlayColor >> 16) & 0xFF;
+      const overlayG = (overlayColor >> 8) & 0xFF;
+      const overlayB = overlayColor & 0xFF;
+      
+      const brightness = getBlockBrightness(overlay.light ?? 15, sun) * overlayAlpha * currentTransparencyMultiplier;
+      
+      overlayRed += overlayR * brightness;
+      overlayGreen += overlayG * brightness;
+      overlayBlue += overlayB * brightness;
+      
+      sun -= overlay.opacity;
+      if (sun < 0) sun = 0;
+      
+      currentTransparencyMultiplier *= (1.0 - overlayAlpha);
     }
+    
+    const baseR = (color >> 16) & 0xFF;
+    const baseG = (color >> 8) & 0xFF;
+    const baseB = color & 0xFF;
+    
+    const blockBrightness = getBlockBrightness(blockLight, sun);
+    
+    const r = Math.min(255, Math.floor(baseR * blockBrightness * currentTransparencyMultiplier + overlayRed));
+    const g = Math.min(255, Math.floor(baseG * blockBrightness * currentTransparencyMultiplier + overlayGreen));
+    const b = Math.min(255, Math.floor(baseB * blockBrightness * currentTransparencyMultiplier + overlayBlue));
+    
+    color = (r << 16) | (g << 8) | b;
+    alpha = 255;
+    
+    return { color, alpha, hasOverlay: true };
   }
 
-  return { color, alpha };
+  return { color, alpha, hasOverlay: false };
 }
 
-export function applyShading(color, height, prevHeight, prevDiagHeight, light) {
+export function applyShading(color, height, prevHeight, prevDiagHeight, light, glowing = false, slopes = 2, shadowR = 1.0, shadowG = 1.0, shadowB = 1.0, hasOverlay = false) {
   let r = (color >> 16) & 0xFF;
   let g = (color >> 8) & 0xFF;
   let b = color & 0xFF;
 
+  let brightnessR = 1.0;
+  let brightnessG = 1.0;
+  let brightnessB = 1.0;
+
   let depthBrightness = 1.0;
 
-  if (height >= 0 && height <= 63) {
-    depthBrightness = 0.6 + (height / 63.0) * 0.4;
+  if (!hasOverlay && height >= 0 && height <= 63) {
+    depthBrightness = 0.7 + (height / 63.0) * 0.3;
+  }
+
+  if (hasOverlay) {
+    r = Math.min(255, r);
+    g = Math.min(255, g);
+    b = Math.min(255, b);
+    return (r << 16) | (g << 8) | b;
   }
 
   const effectivePrevHeight = prevHeight === 32767 ? height : prevHeight;
   const effectivePrevDiagHeight = prevDiagHeight === 32767 ? height : prevDiagHeight;
 
   const verticalSlope = height - effectivePrevHeight;
-  if (verticalSlope > 0) {
-    depthBrightness *= 1.3;
-  } else if (verticalSlope < 0) {
-    depthBrightness *= 0.7;
+  const diagonalSlope = height - effectivePrevDiagHeight;
+
+  if (slopes > 0) {
+    if (slopes === 1) {
+      if (verticalSlope > 0) {
+        depthBrightness *= 1.15;
+      } else if (verticalSlope < 0) {
+        depthBrightness *= 0.85;
+      }
+    } else {
+      const ambientLightColored = glowing ? 0.0 : 0.2;
+      const ambientLightWhite = glowing ? 1.0 : 0.5;
+      const maxDirectLight = glowing ? 0.22222224 : 0.6666667;
+
+      let cos = 0.0;
+
+      if (slopes === 2) {
+        const directLightClamped = -verticalSlope;
+        if (directLightClamped < 1.0) {
+          if (verticalSlope === 1 && diagonalSlope === 1) {
+            cos = 1.0;
+          } else {
+            const whiteLight = verticalSlope - diagonalSlope;
+            const cast = 1.0 - directLightClamped;
+            const crossMagnitude = Math.sqrt(whiteLight * whiteLight + 1.0 + directLightClamped * directLightClamped);
+            cos = (cast / crossMagnitude) / Math.sqrt(2.0);
+          }
+        }
+      } else if (verticalSlope >= 0) {
+        if (verticalSlope === 1) {
+          cos = 1.0;
+        } else {
+          const directLightClamped = Math.sqrt(verticalSlope * verticalSlope + 1);
+          const whiteLight = verticalSlope + 1;
+          cos = (whiteLight / directLightClamped) / Math.sqrt(2.0);
+        }
+      }
+
+      let directLight = 0.0;
+      if (cos === 1.0) {
+        directLight = maxDirectLight;
+      } else if (cos > 0.0) {
+        directLight = Math.ceil(cos * 10.0) / 10.0 * maxDirectLight * 0.88388;
+      }
+
+      const whiteLight = ambientLightWhite + directLight;
+      brightnessR *= shadowR * ambientLightColored + whiteLight;
+      brightnessG *= shadowG * ambientLightColored + whiteLight;
+      brightnessB *= shadowB * ambientLightColored + whiteLight;
+    }
   }
 
-  const brightness = 0.8 * depthBrightness;
+  brightnessR *= depthBrightness;
+  brightnessG *= depthBrightness;
+  brightnessB *= depthBrightness;
 
   if (light < 15) {
     const lightFactor = (9 + light) / 24;
@@ -93,9 +264,9 @@ export function applyShading(color, height, prevHeight, prevDiagHeight, light) {
     b = (b * lightFactor) | 0;
   }
 
-  r = Math.min(255, (r * brightness) | 0);
-  g = Math.min(255, (g * brightness) | 0);
-  b = Math.min(255, (b * brightness) | 0);
+  r = Math.min(255, (r * brightnessR) | 0);
+  g = Math.min(255, (g * brightnessG) | 0);
+  b = Math.min(255, (b * brightnessB) | 0);
 
   return (r << 16) | (g << 8) | b;
 }
@@ -250,8 +421,8 @@ export function renderRegionToPixels(regionData, blockColors, biomeColors, lod =
                 }
               }
 
-              const { color, alpha } = computeBlockColor(block.s, block.b, block.o, blockColors, biomeColors);
-              const shadedColor = applyShading(color, height, prevHeight, prevDiagHeight, block.l ?? 15);
+              const { color, alpha, hasOverlay } = computeBlockColor(block.s, block.b, block.o, blockColors, biomeColors, block.l ?? 15);
+              const shadedColor = applyShading(color, height, prevHeight, prevDiagHeight, block.l ?? 15, false, 2, 1.0, 1.0, 1.0, hasOverlay);
               const pixelIdx = idx << 2;
 
               pixels[pixelIdx] = (shadedColor >> 16) & 0xFF;

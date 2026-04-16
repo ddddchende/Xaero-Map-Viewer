@@ -1241,19 +1241,54 @@ export class MapRenderer {
     let alpha = getBlockAlpha(block.s);
     
     if (isGrassBlock(block.s)) {
-      color = getGrassColor(block.b);
+      const biomeColor = getGrassColor(block.b);
+      const baseR = (color >> 16) & 0xFF;
+      const baseG = (color >> 8) & 0xFF;
+      const baseB = color & 0xFF;
+      const brightnessR = baseR / 255.0;
+      const brightnessG = baseG / 255.0;
+      const brightnessB = baseB / 255.0;
+      const r = Math.floor(((biomeColor >> 16) & 0xFF) * brightnessR);
+      const g = Math.floor(((biomeColor >> 8) & 0xFF) * brightnessG);
+      const b = Math.floor((biomeColor & 0xFF) * brightnessB);
+      color = (r << 16) | (g << 8) | b;
     } else if (isFoliageBlock(block.s)) {
-      color = getFoliageColor(block.b);
+      const biomeColor = getFoliageColor(block.b);
+      const baseR = (color >> 16) & 0xFF;
+      const baseG = (color >> 8) & 0xFF;
+      const baseB = color & 0xFF;
+      const brightnessR = baseR / 255.0;
+      const brightnessG = baseG / 255.0;
+      const brightnessB = baseB / 255.0;
+      const r = Math.floor(((biomeColor >> 16) & 0xFF) * brightnessR);
+      const g = Math.floor(((biomeColor >> 8) & 0xFF) * brightnessG);
+      const b = Math.floor((biomeColor & 0xFF) * brightnessB);
+      color = (r << 16) | (g << 8) | b;
     } else if (isWaterBlock(block.s)) {
-      color = getWaterColor(block.b);
+      const biomeColor = getWaterColor(block.b);
+      const waterBaseR = 63;
+      const waterBaseG = 118;
+      const waterBaseB = 228;
+      const brightnessR = waterBaseR / 255.0;
+      const brightnessG = waterBaseG / 255.0;
+      const brightnessB = waterBaseB / 255.0;
+      const biomeR = (biomeColor >> 16) & 0xFF;
+      const biomeG = (biomeColor >> 8) & 0xFF;
+      const biomeB = biomeColor & 0xFF;
+      const grayBase = 0.6;
+      const r = Math.floor((biomeR * brightnessR + 128 * grayBase) / (1 + grayBase));
+      const g = Math.floor((biomeG * brightnessG + 140 * grayBase) / (1 + grayBase));
+      const b = Math.floor((biomeB * brightnessB + 160 * grayBase) / (1 + grayBase));
+      color = (r << 16) | (g << 8) | b;
       alpha = 180;
     }
     
     if (this.options.showLighting && block.l < 15) {
-      const factor = 0.4 + (block.l / 15) * 0.6;
-      const r = Math.floor(((color >> 16) & 0xFF) * factor);
-      const g = Math.floor(((color >> 8) & 0xFF) * factor);
-      const b = Math.floor((color & 0xFF) * factor);
+      const lightMin = 9;
+      const brightness = (lightMin + block.l) / (15 + lightMin);
+      const r = Math.floor(((color >> 16) & 0xFF) * brightness);
+      const g = Math.floor(((color >> 8) & 0xFF) * brightness);
+      const b = Math.floor((color & 0xFF) * brightness);
       color = (r << 16) | (g << 8) | b;
     }
     
