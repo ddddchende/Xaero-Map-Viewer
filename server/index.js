@@ -158,6 +158,20 @@ function isRegionInAnyViewport(regionX, regionZ) {
   return false;
 }
 
+function findInsertIndex(priority) {
+  let left = 0;
+  let right = taskQueue.length;
+  while (left < right) {
+    const mid = (left + right) >>> 1;
+    if (taskQueue[mid].priority > priority) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+  return left;
+}
+
 function initWorkerPool() {
   for (let i = 0; i < NUM_WORKERS; i++) {
     const worker = new Worker(path.join(__dirname, 'regionWorker.js'), {
@@ -199,8 +213,6 @@ function processNextTask() {
   if (freeWorkerIndex === -1) return;
   
   while (taskQueue.length > 0) {
-    taskQueue.sort((a, b) => b.priority - a.priority);
-    
     const task = taskQueue.shift();
     
     if (cancelledRequests.has(task.requestId)) {
@@ -276,7 +288,7 @@ function runWorkerTask(dimPath, regionX, regionZ, caveMode, caveStart, lod, prio
   return new Promise((resolve, reject) => {
     const taskId = taskIdCounter++;
     
-    taskQueue.push({
+    const task = {
       taskId,
       requestId,
       dimPath,
@@ -288,7 +300,10 @@ function runWorkerTask(dimPath, regionX, regionZ, caveMode, caveStart, lod, prio
       priority,
       resolve,
       reject
-    });
+    };
+    
+    const insertIndex = findInsertIndex(priority);
+    taskQueue.splice(insertIndex, 0, task);
     
     processNextTask();
   });

@@ -45,7 +45,6 @@ class XaeroMapViewer {
   private abortController: AbortController | null = null;
   private cacheSizeTimeout: ReturnType<typeof setTimeout> | null = null;
   private viewportChangeTimeout: ReturnType<typeof setTimeout> | null = null;
-  private lastViewportBounds: ViewportBounds | null = null;
   private currentRequestId: number = 0;
   private ws: WebSocket | null = null;
   private wsConnected: boolean = false;
@@ -746,7 +745,7 @@ class XaeroMapViewer {
   }
 
   private copyContextCoords(): void {
-    const text = `${this.contextWorldX}, ${this.contextWorldZ}`;
+    const text = `${this.contextWorldX}  ${this.contextWorldZ}`;
     navigator.clipboard.writeText(text).then(() => {
       console.log('坐标已复制:', text);
     }).catch(err => {
@@ -975,7 +974,6 @@ class XaeroMapViewer {
     
     if (!this.currentWorld) return;
     
-    this.saveMapState();
     this.updateStatus('正在加载维度...');
     
     const signal = this.abortController?.signal;
@@ -1111,8 +1109,6 @@ class XaeroMapViewer {
       caveStartGroup.style.display = this.currentCaveMode === 1 ? 'block' : 'none';
     }
     
-    this.saveMapState();
-    
     this.updateStatus('正在加载地图类型...');
     
     const signal = this.abortController?.signal;
@@ -1185,8 +1181,6 @@ class XaeroMapViewer {
   private handleMapTypeChange(): void {
     const selector = document.getElementById('mapTypeSelector') as HTMLSelectElement;
     this.currentMapType = selector.value;
-    
-    this.saveMapState();
     
     if (this.currentMapType) {
       this.loadRegionList();
@@ -1265,7 +1259,7 @@ class XaeroMapViewer {
         }
       } catch {}
       
-      if (savedScale && savedCenterX !== undefined && savedCenterZ !== undefined) {
+      if (savedScale !== undefined && savedCenterX !== undefined && savedCenterZ !== undefined) {
         this.renderer.setViewState(savedScale, savedCenterX, savedCenterZ);
       } else if (this.allRegions.length === 0) {
         const currentView = this.renderer.getViewState();
@@ -1284,19 +1278,25 @@ class XaeroMapViewer {
   }
 
   private onViewportChange(bounds: ViewportBounds): void {
-    const shouldCancelRequest = this.shouldCancelPendingRequests(bounds);
+    const regionsToRemove = this.getRegionsOutsideViewport(bounds);
     
-    if (shouldCancelRequest) {
-      this.cancelServerRequest();
-      if (this.abortController) {
-        this.abortController.abort();
+    if (regionsToRemove.size > 0) {
+      const allRegionsOutside = regionsToRemove.size === this.loadingRegions.size;
+      
+      if (allRegionsOutside) {
+        this.cancelServerRequest();
+        if (this.abortController) {
+          this.abortController.abort();
+        }
+        this.abortController = new AbortController();
+        this.loadingRegions.clear();
+      } else {
+        for (const key of regionsToRemove) {
+          this.loadingRegions.delete(key);
+        }
       }
-      this.abortController = new AbortController();
-      this.loadingRegions.clear();
       this.updatePendingRegions();
     }
-    
-    this.lastViewportBounds = bounds;
     
     if (this.viewportChangeTimeout) {
       clearTimeout(this.viewportChangeTimeout);
@@ -1316,16 +1316,17 @@ class XaeroMapViewer {
     }
   }
 
-  private shouldCancelPendingRequests(newBounds: ViewportBounds): boolean {
-    if (!this.lastViewportBounds) return false;
-    if (this.loadingRegions.size === 0) return false;
+  private getRegionsOutsideViewport(bounds: ViewportBounds): Set<string> {
+    const outside = new Set<string>();
     
-    const oldBounds = this.lastViewportBounds;
-    const dx = Math.abs(newBounds.startX - oldBounds.startX);
-    const dz = Math.abs(newBounds.startZ - oldBounds.startZ);
-    const threshold = 1;
+    for (const key of this.loadingRegions) {
+      const [x, z] = key.split(',').map(Number);
+      if (x < bounds.startX || x > bounds.endX || z < bounds.startZ || z > bounds.endZ) {
+        outside.add(key);
+      }
+    }
     
-    return dx > threshold || dz > threshold;
+    return outside;
   }
 
   private onLodChange(): void {
