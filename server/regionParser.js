@@ -5,11 +5,20 @@ import path from 'path';
 
 export const DEFAULT_BIOME = { grass: 0x91bd59, foliage: 0x77ab2f, water: 0x3f76e4 };
 
-export function computeBlockColor(state, biome, hasWaterOverlay, blockColors, biomeColors) {
+export function computeBlockColor(state, biome, overlays, blockColors, biomeColors) {
   if (!state || state === 'minecraft:air') {
-    if (hasWaterOverlay) {
-      const biomeColor = biomeColors[biome] || DEFAULT_BIOME;
-      return { color: biomeColor.water, alpha: 191 };
+    if (overlays && overlays.length > 0) {
+      const topOverlay = overlays[overlays.length - 1];
+      const overlayInfo = blockColors[topOverlay.state];
+      if (overlayInfo) {
+        let overlayColor = overlayInfo.color;
+        if (overlayInfo.water) {
+          const biomeColor = biomeColors[biome] || DEFAULT_BIOME;
+          overlayColor = biomeColor.water;
+        }
+        const alpha = Math.floor((topOverlay.opacity / 15) * 255);
+        return { color: overlayColor, alpha };
+      }
     }
     return { color: 0, alpha: 0 };
   }
@@ -27,14 +36,28 @@ export function computeBlockColor(state, biome, hasWaterOverlay, blockColors, bi
     color = info.grass ? biomeColor.grass : biomeColor.foliage;
   }
 
-  if (hasWaterOverlay) {
-    const biomeColor = biomeColors[biome] || DEFAULT_BIOME;
-    const waterColor = biomeColor.water;
-    const r = (((color >> 16) & 0xFF) * 64 + ((waterColor >> 16) & 0xFF) * 191) >> 8;
-    const g = (((color >> 8) & 0xFF) * 64 + ((waterColor >> 8) & 0xFF) * 191) >> 8;
-    const b = ((color & 0xFF) * 64 + (waterColor & 0xFF) * 191) >> 8;
-    color = (r << 16) | (g << 8) | b;
-    alpha = 255;
+  if (overlays && overlays.length > 0) {
+    for (let i = overlays.length - 1; i >= 0; i--) {
+      const overlay = overlays[i];
+      const overlayInfo = blockColors[overlay.state];
+      if (!overlayInfo) continue;
+
+      let overlayColor = overlayInfo.color;
+      if (overlayInfo.water) {
+        const biomeColor = biomeColors[biome] || DEFAULT_BIOME;
+        overlayColor = biomeColor.water;
+      }
+
+      const overlayAlpha = overlay.opacity / 15;
+      const invAlpha = 1 - overlayAlpha;
+
+      const r = Math.floor(((color >> 16) & 0xFF) * invAlpha + ((overlayColor >> 16) & 0xFF) * overlayAlpha);
+      const g = Math.floor(((color >> 8) & 0xFF) * invAlpha + ((overlayColor >> 8) & 0xFF) * overlayAlpha);
+      const b = Math.floor((color & 0xFF) * invAlpha + (overlayColor & 0xFF) * overlayAlpha);
+
+      color = (r << 16) | (g << 8) | b;
+      alpha = 255;
+    }
   }
 
   return { color, alpha };
@@ -227,7 +250,7 @@ export function renderRegionToPixels(regionData, blockColors, biomeColors, lod =
                 }
               }
 
-              const { color, alpha } = computeBlockColor(block.s, block.b, block.w, blockColors, biomeColors);
+              const { color, alpha } = computeBlockColor(block.s, block.b, block.o, blockColors, biomeColors);
               const shadedColor = applyShading(color, height, prevHeight, prevDiagHeight, block.l ?? 15);
               const pixelIdx = idx << 2;
 
@@ -489,7 +512,7 @@ export function parseBlock(data, view, offset, parametres, minorVersion, majorVe
   const hasTopHeight = minorVersion >= 4 && (parametres & 0x1000000) !== 0;
   if (hasTopHeight && offset + 1 <= data.length) offset++;
 
-  let hasWaterOverlay = false;
+  let overlays = [];
 
   if (hasOverlays && offset + 1 <= data.length) {
     const overlayCount = view.getUint8(offset++);
@@ -497,8 +520,12 @@ export function parseBlock(data, view, offset, parametres, minorVersion, majorVe
       try {
         const overlayResult = parseOverlay(data, view, offset, minorVersion, majorVersion, blockStatePalette);
         offset = overlayResult.newOffset;
-        if (overlayResult.state === 'minecraft:water') {
-          hasWaterOverlay = true;
+        if (overlayResult.state) {
+          overlays.push({
+            state: overlayResult.state,
+            opacity: overlayResult.opacity || 15,
+            light: overlayResult.light || 15
+          });
         }
       } catch (e) {
         break;
@@ -543,7 +570,7 @@ export function parseBlock(data, view, offset, parametres, minorVersion, majorVe
       h: height,
       l: 15,
       b: biome,
-      w: hasWaterOverlay
+      o: overlays.length > 0 ? overlays : undefined
     },
     newOffset: offset
   };
@@ -583,7 +610,10 @@ export function parseOverlay(data, view, offset, minorVersion, majorVersion, blo
   if (savedColorType === 2 || (overlayParams & 4) !== 0) offset += 4;
   if (minorVersion < 8 && (overlayParams & 8) !== 0) offset += 4;
 
-  return { newOffset: offset, state: overlayState };
+  const opacity = (overlayParams >> 11) & 15;
+  const light = (overlayParams >> 4) & 15;
+
+  return { newOffset: offset, state: overlayState, opacity, light };
 }
 
 export function readNBTInline(data, offset) {
