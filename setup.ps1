@@ -174,6 +174,7 @@ if (Test-Path $configPath) {
             Write-Host "    缓存条目:   $($config.maxCacheEntries)" -ForegroundColor DarkGray
             Write-Host "    并发加载:   $($config.maxConcurrentLoads)" -ForegroundColor DarkGray
             Write-Host "    批量区域:   $($config.maxBatchRegions)" -ForegroundColor DarkGray
+            Write-Host "    压缩级别:   $($config.compressionLevel)" -ForegroundColor DarkGray
             Write-Host ""
 
             $skipConfig = Read-Default "配置已存在，是否跳过? (y=跳过 / n=重新配置)" "y"
@@ -226,6 +227,9 @@ if (-not $configLoaded) {
     $defBatch = Get-DefaultVal $config.maxBatchRegions 512
     $maxBatch = Read-Default "最大批量区域数" $defBatch
 
+    $defCompression = Get-DefaultVal $config.compressionLevel 6
+    $compressionLevel = Read-Default "HTTP压缩级别 (0-9, 0=不压缩, 9=最高压缩)" $defCompression
+
     $newConfig = @{
         port               = [int]$port
         maxMemoryMB        = [int]$maxMem
@@ -234,6 +238,7 @@ if (-not $configLoaded) {
         maxCacheEntries    = [int]$maxCache
         maxConcurrentLoads = [int]$maxConcurrent
         maxBatchRegions    = [int]$maxBatch
+        compressionLevel   = [int]$compressionLevel
     }
 
     $newConfig | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8

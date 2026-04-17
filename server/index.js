@@ -24,22 +24,26 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(compression({ level: 9, threshold: 1024 }));
-app.use(express.json());
-app.use(express.static(path.join(__dirname, '../dist')));
+
+const SERVER_CONFIG_FILE = path.join(__dirname, 'server_config.json');
 
 let mapDirectory = '';
 let cacheDirectory = path.join(__dirname, 'cache');
 let currentMapDbPath = '';
 let currentWorld = null;
 
-const SERVER_CONFIG_FILE = path.join(__dirname, 'server_config.json');
-
 const totalMemoryGB = totalmem() / (1024 * 1024 * 1024);
 let maxMemoryCacheEntries = Math.min(256, Math.floor(totalMemoryGB * 16));
 if (maxMemoryCacheEntries < 64) maxMemoryCacheEntries = 64;
 let maxConcurrentLoads = 32;
 let maxBatchRegions = 64;
+let compressionLevel = 6;
+
+loadServerConfig();
+
+app.use(compression({ level: compressionLevel, threshold: 1024 }));
+app.use(express.json());
+app.use(express.static(path.join(__dirname, '../dist')));
 
 const bufferPool = [];
 const BUFFER_POOL_MAX_SIZE = 64;
@@ -63,7 +67,11 @@ function releaseBuffer(buf) {
 function loadServerConfig() {
   try {
     if (existsSync(SERVER_CONFIG_FILE)) {
-      const config = JSON.parse(readFileSync(SERVER_CONFIG_FILE, 'utf-8'));
+      let content = readFileSync(SERVER_CONFIG_FILE, 'utf-8');
+      if (content.charCodeAt(0) === 0xFEFF) {
+        content = content.slice(1);
+      }
+      const config = JSON.parse(content);
       if (config.mapDirectory) {
         mapDirectory = config.mapDirectory;
       }
@@ -79,12 +87,15 @@ function loadServerConfig() {
       if (config.maxBatchRegions) {
         maxBatchRegions = config.maxBatchRegions;
       }
+      if (config.compressionLevel !== undefined) {
+        compressionLevel = config.compressionLevel;
+      }
+      console.log('Config loaded:', { mapDirectory, compressionLevel, maxCacheEntries: maxMemoryCacheEntries });
     } else {
       saveServerConfig();
     }
   } catch (e) {
     console.log('Failed to load server config:', e.message);
-    saveServerConfig();
   }
 }
 
@@ -95,14 +106,13 @@ function saveServerConfig() {
       cacheDirectory,
       maxCacheEntries: maxMemoryCacheEntries,
       maxConcurrentLoads,
-      maxBatchRegions
+      maxBatchRegions,
+      compressionLevel
     }, null, 2));
   } catch (e) {
     console.log('Failed to save server config:', e.message);
   }
 }
-
-loadServerConfig();
 
 const MAX_MEMORY_CACHE_ENTRIES = maxMemoryCacheEntries;
 const MAX_CONCURRENT_LOADS = maxConcurrentLoads;

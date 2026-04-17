@@ -1,9 +1,10 @@
-{
+﻿{
   "port": 3001,
   "maxMemoryMB": 4096,
   "mapDirectory": "E:\\Game\\AC1.21.4基础整合包\\.minecraft\\versions\\1.21.1-Fabric 0.16.14\\xaero",
   "cacheDirectory": "D:\\TEMP\\Xaro地图预览器",
-  "maxCacheEntries": 40000,
-  "maxConcurrentLoads": 512,
-  "maxBatchRegions": 512
+  "maxCacheEntries": 4000,
+  "maxConcurrentLoads": 32,
+  "maxBatchRegions": 64,
+  "compressionLevel": 9
 }
