@@ -60,6 +60,16 @@ interface SlotAllocation {
   slotIndex: number;
 }
 
+interface DimensionCache {
+  atlases: AtlasInfo[];
+  regionSlots: Map<string, SlotAllocation>;
+  slotLastAccess: Map<string, number>;
+  loadedRegionKeys: Set<string>;
+  pendingRegionKeys: Set<string>;
+  allRegionKeys: Set<string>;
+  regionLodLevels: Map<string, number>;
+}
+
 export class MapRenderer {
   private canvas: HTMLCanvasElement;
   private gl: WebGLRenderingContext;
@@ -92,6 +102,8 @@ export class MapRenderer {
   private static readonly LONG_PRESS_DURATION = 500;
   
   private currentDim: string | null = null;
+  private currentWorld: string | null = null;
+  private dimensionCaches: Map<string, DimensionCache> = new Map();
   
   private onViewportChangeCallback: ((bounds: ViewportBounds) => void) | null = null;
   private onLodChangeCallback: (() => void) | null = null;
@@ -238,6 +250,80 @@ export class MapRenderer {
 
   getIdleState(): boolean {
     return this.isIdle;
+  }
+
+  setCurrentWorld(world: string | null): void {
+    if (this.currentWorld !== world) {
+      this.clearAllDimensionCaches();
+    }
+    this.currentWorld = world;
+  }
+
+  private getCacheKey(): string {
+    return `${this.currentWorld}:${this.currentDim}`;
+  }
+
+  private saveCurrentDimensionCache(): void {
+    if (!this.currentWorld || !this.currentDim) return;
+    
+    const key = this.getCacheKey();
+    const cache: DimensionCache = {
+      atlases: this.atlases,
+      regionSlots: this.regionSlots,
+      slotLastAccess: this.slotLastAccess,
+      loadedRegionKeys: this.loadedRegionKeys,
+      pendingRegionKeys: this.pendingRegionKeys,
+      allRegionKeys: this.allRegionKeys,
+      regionLodLevels: this.regionLodLevels
+    };
+    this.dimensionCaches.set(key, cache);
+  }
+
+  switchDimension(dim: string | null): boolean {
+    if (this.currentDim === dim) return false;
+    
+    this.saveCurrentDimensionCache();
+    
+    this.currentDim = dim;
+    
+    if (!this.currentWorld || !this.currentDim) {
+      this.clearCurrentCache();
+      return true;
+    }
+    
+    const key = this.getCacheKey();
+    const cached = this.dimensionCaches.get(key);
+    
+    if (cached) {
+      this.atlases = cached.atlases;
+      this.regionSlots = cached.regionSlots;
+      this.slotLastAccess = cached.slotLastAccess;
+      this.loadedRegionKeys = cached.loadedRegionKeys;
+      this.pendingRegionKeys = cached.pendingRegionKeys;
+      this.allRegionKeys = cached.allRegionKeys;
+      this.regionLodLevels = cached.regionLodLevels;
+      this.scheduleRender();
+      return true;
+    } else {
+      this.clearCurrentCache();
+      return false;
+    }
+  }
+
+  private clearCurrentCache(): void {
+    this.atlases = [];
+    this.regionSlots = new Map();
+    this.slotLastAccess = new Map();
+    this.loadedRegionKeys = new Set();
+    this.pendingRegionKeys = new Set();
+    this.allRegionKeys = new Set();
+    this.regionLodLevels = new Map();
+    this.scheduleRender();
+  }
+
+  private clearAllDimensionCaches(): void {
+    this.dimensionCaches.clear();
+    this.clearCurrentCache();
   }
 
   setCurrentDimension(dim: string | null): void {

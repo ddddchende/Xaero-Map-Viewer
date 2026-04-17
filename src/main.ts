@@ -52,8 +52,20 @@ class XaeroMapViewer {
   private static readonly IDLE_UPGRADE_DELAY_MS = 100;
   
   private loadingRegionStartTime: Map<string, number> = new Map();
-  private static readonly REQUEST_TIMEOUT_MS = 1000; //区域请求超时1秒
+  private static readonly REQUEST_TIMEOUT_MS = 1000;
   private timeoutCheckInterval: ReturnType<typeof setInterval> | null = null;
+  
+  private dimDataCache: Map<string, {
+    allRegions: {x: number, z: number}[];
+    allRegionSet: Set<string>;
+    loadingRegions: Set<string>;
+    regionAccessTime: Map<string, number>;
+    loadingRegionStartTime: Map<string, number>;
+    mapTypes: {name: string, path: string}[];
+    currentMapType: string | null;
+    currentCaveMode: number;
+    currentCaveStart: number;
+  }> = new Map();
 
   constructor() {
     this.loadConcurrentSetting();
@@ -966,7 +978,14 @@ class XaeroMapViewer {
     this.abortController = new AbortController();
     
     const selector = document.getElementById('worldSelector') as HTMLSelectElement;
-    this.currentWorld = selector.value;
+    const newWorld = selector.value;
+    
+    if (this.currentWorld !== newWorld) {
+      this.dimDataCache.clear();
+      this.renderer.setCurrentWorld(newWorld);
+    }
+    
+    this.currentWorld = newWorld;
     
     if (!this.currentWorld) return;
     
@@ -1041,17 +1060,56 @@ class XaeroMapViewer {
     this.currentRequestId++;
     
     const selector = document.getElementById('dimSelector') as HTMLSelectElement;
-    this.currentDim = selector.value;
+    const newDim = selector.value;
     
-    this.renderer.setCurrentDimension(this.currentDim);
+    if (!this.currentWorld || !newDim) return;
     
-    if (!this.currentWorld || !this.currentDim) return;
+    const cacheKey = `${this.currentWorld}:${this.currentDim}`;
+    if (this.currentDim) {
+      this.dimDataCache.set(cacheKey, {
+        allRegions: this.allRegions,
+        allRegionSet: this.allRegionSet,
+        loadingRegions: this.loadingRegions,
+        regionAccessTime: this.regionAccessTime,
+        loadingRegionStartTime: this.loadingRegionStartTime,
+        mapTypes: this.mapTypes,
+        currentMapType: this.currentMapType,
+        currentCaveMode: this.currentCaveMode,
+        currentCaveStart: this.currentCaveStart
+      });
+    }
     
-    this.renderer.clearAllRegions();
+    const hasCachedRenderer = this.renderer.switchDimension(newDim);
+    this.currentDim = newDim;
+    
+    const newCacheKey = `${this.currentWorld}:${this.currentDim}`;
+    const cachedData = this.dimDataCache.get(newCacheKey);
+    
+    if (hasCachedRenderer && cachedData) {
+      this.allRegions = cachedData.allRegions;
+      this.allRegionSet = cachedData.allRegionSet;
+      this.loadingRegions = cachedData.loadingRegions;
+      this.regionAccessTime = cachedData.regionAccessTime;
+      this.loadingRegionStartTime = cachedData.loadingRegionStartTime;
+      this.mapTypes = cachedData.mapTypes;
+      this.currentMapType = cachedData.currentMapType;
+      this.currentCaveMode = cachedData.currentCaveMode;
+      this.currentCaveStart = cachedData.currentCaveStart;
+      
+      this.updateMapTypeSelector();
+      this.updateCaveModeUI();
+      this.renderer.setPendingRegions(this.loadingRegions);
+      this.renderer.setAllRegions(this.allRegionSet);
+      this.updateStatus(`已恢复维度缓存 (${this.allRegions.length} 个区域)`);
+      this.loadWaypoints();
+      return;
+    }
+    
     this.allRegions = [];
-    this.allRegionSet.clear();
-    this.loadingRegions.clear();
-    this.regionAccessTime.clear();
+    this.allRegionSet = new Set();
+    this.loadingRegions = new Set();
+    this.regionAccessTime = new Map();
+    this.loadingRegionStartTime = new Map();
     
     const isNether = this.currentDim.toLowerCase().includes('nether') || 
                      this.currentDim.includes('DIM-1') || 
@@ -1171,6 +1229,55 @@ class XaeroMapViewer {
       }
       console.error('Failed to load map types:', e);
       this.updateStatus('获取地图类型失败');
+    }
+  }
+  
+  private updateMapTypeSelector(): void {
+    const mapTypeSelector = document.getElementById('mapTypeSelector') as HTMLSelectElement;
+    const container = document.getElementById('worldSection') as HTMLElement;
+    
+    if (!mapTypeSelector || !container) return;
+    
+    mapTypeSelector.innerHTML = '';
+    
+    if (this.mapTypes.length === 0) {
+      container.style.display = 'none';
+      return;
+    }
+    
+    container.style.display = 'block';
+    
+    for (const mt of this.mapTypes) {
+      const option = document.createElement('option');
+      option.value = mt.path;
+      option.textContent = mt.name;
+      mapTypeSelector.appendChild(option);
+    }
+    
+    if (this.currentMapType) {
+      mapTypeSelector.value = this.currentMapType;
+    }
+  }
+  
+  private updateCaveModeUI(): void {
+    const caveModeSelector = document.getElementById('caveModeSelector') as HTMLSelectElement;
+    const caveStartGroup = document.getElementById('caveStartGroup') as HTMLElement;
+    const caveStartSlider = document.getElementById('caveStartSlider') as HTMLInputElement;
+    const caveStartValue = document.getElementById('caveStartValue');
+    
+    if (caveModeSelector) {
+      caveModeSelector.value = String(this.currentCaveMode);
+    }
+    
+    if (caveStartGroup) {
+      caveStartGroup.style.display = this.currentCaveMode === 1 ? 'block' : 'none';
+    }
+    
+    if (caveStartSlider) {
+      caveStartSlider.value = String(this.currentCaveStart);
+    }
+    if (caveStartValue) {
+      caveStartValue.textContent = String(this.currentCaveStart);
     }
   }
 
